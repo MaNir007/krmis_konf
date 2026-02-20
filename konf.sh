@@ -1,64 +1,89 @@
 #!/bin/bash
 
-# --- GLOBALNE FUNKCIJE ---
-log_success() { echo -e "\e[32m[USPJEH]\e[0m $1"; }
-log_error() { echo -e "\e[31m[GREŠKA]\e[0m $1"; }
-log_info() { echo -e "\e[34m[INFO]\e[0m $1"; }
+# ==========================================================================
+# NAZIV: Ultra Service Automator (Linux Mint / Debian) - COMPETITION EDITION
+# OPIS: Profesionalna automatizacija mrežne konfiguracije i servisa.
+# ==========================================================================
 
-pause(){
-   read -p "Pritisnite [Enter] za nastavak..." fackEnterKey
+# --- BOJE I STIL ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' 
+
+# --- POMOĆNE FUNKCIJE ---
+log_success() { echo -e "${GREEN}${BOLD}[✔] USPJEH:${NC} $1"; }
+log_error() { echo -e "${RED}${BOLD}[✘] GREŠKA:${NC} $1"; }
+log_info() { echo -e "${BLUE}${BOLD}[i] INFO:${NC} $1"; }
+log_warn() { echo -e "${YELLOW}${BOLD}[!] UPOZORENJE:${NC} $1"; }
+log_step() { echo -e "${PURPLE}${BOLD}➤ $1${NC}"; }
+
+pause() {
+    echo -e "\n${CYAN}──────────────────────────────────────────────────────────${NC}"
+    read -p "Pritisnite [Enter] za povratak u glavni izbornik..."
 }
 
-setup_ip() {
-    echo "--- MREŽNA KONFIGURACIJA ---"
-    read -p "Unesite naziv sučelja (npr. ens33): " INTERFACE
-    read -p "Unesite željenu statičku IP adresu (npr. 172.16.2.10): " REQ_IP
-    read -p "Unesite subnet masku (CIDR, npr. 24): " MASK
-
-    CURRENT_IP=$(ip -4 addr show $INTERFACE | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
-
-    if [ "$CURRENT_IP" != "$REQ_IP" ]; then
-        log_info "Postavljanje IP adrese $REQ_IP na $INTERFACE..."
-        sudo ip addr flush dev $INTERFACE
-        sudo ip addr add $REQ_IP/$MASK dev $INTERFACE
-        sudo ip link set $INTERFACE up
-        if [ $? -eq 0 ]; then log_success "IP adresa postavljena."; else log_error "Neuspjelo postavljanje IP-a."; exit 1; fi
-    else
-        log_success "Sučelje već ima ispravnu adresu: $CURRENT_IP."
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        log_error "Ovu skriptu morate pokrenuti kao root (koristite sudo)."
+        exit 1
     fi
-    SERVER_IP=$REQ_IP
 }
 
-# --- GLAVNI MENU ---
-clear
-echo "=========================================================="
-echo "    DINAMIČKA AUTOMATIZACIJA SERVISA (LV8 - LV11)        "
-echo "=========================================================="
-echo "1) DHCP (Kea) - [LV8]"
-echo "2) DNS (Bind9) - [LV9]"
-echo "3) FTP (vsftpd) - [LV10]"
-echo "4) SSH (OpenSSH) - [LV11]"
-echo "5) Izlaz"
-echo "=========================================================="
-read -p "Odaberite opciju [1-5]: " opcija
+print_banner() {
+    echo -e "${CYAN}"
+    cat << "EOF"
+    ██████╗ ██╗   ██╗███╗   ██╗ █████╗ ███╗   ███╗██╗ ██████╗ 
+    ██╔══██╗╚██╗ ██╔╝████╗  ██║██╔══██╗████╗ ████║██║██╔════╝ 
+    ██║  ██║ ╚████╔╝ ██╔██╗ ██║███████║██╔████╔██║██║██║      
+    ██║  ██║  ╚██╔╝  ██║╚██╗██║██╔══██║██║╚██╔╝██║██║██║      
+    ██████╔╝   ██║   ██║ ╚████║██║  ██║██║ ╚═╝ ██║██║╚██████╗ 
+    ╚═════╝    ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝ ╚═════╝ 
+             S E R V I C E   A U T O M A T O R  v2.0
+EOF
+    echo -e "${NC}"
+}
 
-case $opcija in
-    1)
-        echo "--- KONFIGURACIJA DHCP (KEA) - LV8 ---"
-        setup_ip
-        read -p "Unesite mrežnu adresu (npr. 172.16.2.0): " NETWORK
-        read -p "Unesite POOL START (npr. 172.16.2.30): " P_START
-        read -p "Unesite POOL END (npr. 172.16.2.50): " P_END
-        read -p "Unesite IP Gateway-a: " GW
-        read -p "Unesite IP DNS-a: " DNS_IP
+# --- MODUL 1: STATIC IP CONFIGURATION ---
+setup_static_ip() {
+    log_step "KONFIGURACIJA STATIČKE IP ADRESE"
+    ip -brief link show
+    read -p "Unesite sučelje (npr. ens33): " INTERFACE
+    read -p "Željena IP adresa (npr. 172.16.2.10): " REQ_IP
+    read -p "Subnet maska (CIDR npr. 24): " MASK
+    read -p "Gateway (npr. 172.16.2.1): " GW_IP
 
-        log_info "Instalacija Kea DHCP servera..."
-        sudo apt update && sudo apt install kea-dhcp4-server -y
+    log_info "Primjenjujem mrežne postavke..."
+    ip addr flush dev "$INTERFACE"
+    ip addr add "$REQ_IP/$MASK" dev "$INTERFACE"
+    ip link set "$INTERFACE" up
+    [ -n "$GW_IP" ] && ip route add default via "$GW_IP" 2>/dev/null
+    
+    SERVER_IP=$REQ_IP
+    log_success "Mreža na $INTERFACE je uspješno podignuta."
+    pause
+}
 
-        cat <<EOF | sudo tee /etc/kea/kea-dhcp4.conf
+# --- MODUL 2: DHCP (KEA) ---
+setup_dhcp() {
+    log_step "KONFIGURACIJA DHCP SERVERA (KEA)"
+    [ -z "$SERVER_IP" ] && read -p "Unesite IP adresu servera: " SERVER_IP
+    read -p "Mrežna adresa (npr. 172.16.2.0): " NETWORK
+    read -p "CIDR (npr. 24): " MASK
+    read -p "Pool početak: " P_START
+    read -p "Pool kraj: " P_END
+
+    log_info "Instalacija paketa i generiranje konfiguracije..."
+    apt update && apt install kea-dhcp4-server -y
+
+    cat <<EOF > /etc/kea/kea-dhcp4.conf
 {
 "Dhcp4": {
-    "interfaces-config": { "interfaces": ["$INTERFACE"] },
+    "interfaces-config": { "interfaces": ["*"] },
     "control-socket": { "socket-type": "unix", "socket-name": "/tmp/kea4-ctrl-socket" },
     "lease-database": { "type": "memfile", "lfc-interval": 3600 },
     "subnet4": [
@@ -66,8 +91,8 @@ case $opcija in
             "subnet": "$NETWORK/$MASK",
             "pools": [ { "pool": "$P_START - $P_END" } ],
             "option-data": [
-                { "name": "domain-name-servers", "data": "$DNS_IP" },
-                { "name": "routers", "data": "$GW" }
+                { "name": "domain-name-servers", "data": "$SERVER_IP" },
+                { "name": "routers", "data": "$SERVER_IP" }
             ],
             "valid-lifetime": 7200
         }
@@ -75,76 +100,68 @@ case $opcija in
 }
 }
 EOF
-        sudo systemctl restart kea-dhcp4-server
-        log_success "DHCP (Kea) je konfiguriran."
-        
-        echo -e "\n--- TESTNE NAREDBE (KOPIRAJ U DRUGI TERMINAL) ---"
-        echo "1. Provjera statusa: sudo systemctl status kea-dhcp4-server"
-        echo "2. Logovi u realnom vremenu: sudo journalctl -u kea-dhcp4-server -f"
-        echo "3. Provjera konfiguracije: sudo kea-dhcp4 -t /etc/kea/kea-dhcp4.conf"
-        pause
-        ;;
+    ufw allow 67/udp && ufw allow 68/udp
+    systemctl restart kea-dhcp4-server
+    log_success "Kea DHCP je online. Portovi 67/68 otvoreni."
+    
+    echo -e "\n${BOLD}TESTNE NAREDBE:${NC}"
+    echo "• sudo kea-dhcp4 -t /etc/kea/kea-dhcp4.conf"
+    echo "• sudo journalctl -u kea-dhcp4-server -n 10"
+    pause
+}
 
-    2)
-        echo "--- KONFIGURACIJA DNS (BIND9) - LV9 ---"
-        setup_ip
-        read -p "Unesite naziv domene (npr. krmis.tsrb.com): " DOMAIN
-        FWD_FILE="db.$DOMAIN"
-        
-        # Izračun reverse zone
-        REV_ZONE_NAME=$(echo $SERVER_IP | awk -F. '{print $3"."$2"."$1}')
-        REV_FILE="db.$REV_ZONE_NAME"
-        LAST_OCTET=$(echo $SERVER_IP | awk -F. '{print $4}')
+# --- MODUL 3: DNS (BIND9) ---
+setup_dns() {
+    log_step "KONFIGURACIJA DNS SERVERA (BIND9)"
+    [ -z "$SERVER_IP" ] && read -p "IP adresa servera: " SERVER_IP
+    read -p "Domena (npr. natjecanje.hr): " DOMAIN
 
-        log_info "Instalacija BIND9..."
-        sudo apt update && sudo apt install bind9 bind9utils bind9-doc -y
+    REV_ZONE=$(echo "$SERVER_IP" | awk -F. '{print $3"."$2"."$1}')
+    LAST_OCTET=$(echo "$SERVER_IP" | awk -F. '{print $4}')
 
-        # named.conf.local
-        cat <<EOF | sudo tee /etc/bind/named.conf.local
-zone "$DOMAIN" IN { type master; file "/etc/bind/$FWD_FILE"; };
-zone "$REV_ZONE_NAME.in-addr.arpa" { type master; file "/etc/bind/$REV_FILE"; };
+    apt update && apt install bind9 bind9utils -y
+
+    cat <<EOF > /etc/bind/named.conf.local
+zone "$DOMAIN" { type master; file "/etc/bind/db.$DOMAIN"; };
+zone "$REV_ZONE.in-addr.arpa" { type master; file "/etc/bind/db.rev"; };
 EOF
 
-        # Forward Zone
-        cat <<EOF | sudo tee /etc/bind/$FWD_FILE
+    cat <<EOF > /etc/bind/db.$DOMAIN
 \$TTL 604800
-@ IN SOA ns.$DOMAIN. admin.$DOMAIN. ( $(date +%Y%m%d)01 604800 86400 2419200 604800 )
+@ IN SOA ns.$DOMAIN. root.$DOMAIN. ( $(date +%Y%m%d)01 604800 86400 2419200 604800 )
 @ IN NS ns.$DOMAIN.
 ns IN A $SERVER_IP
 @ IN A $SERVER_IP
 www IN CNAME @
 EOF
 
-        # Reverse Zone
-        cat <<EOF | sudo tee /etc/bind/$REV_FILE
+    cat <<EOF > /etc/bind/db.rev
 \$TTL 604800
-@ IN SOA ns.$DOMAIN. root.ns.$DOMAIN. ( $(date +%Y%m%d)01 604800 86400 2419200 604800 )
+@ IN SOA ns.$DOMAIN. root.$DOMAIN. ( $(date +%Y%m%d)01 604800 86400 2419200 604800 )
 @ IN NS ns.$DOMAIN.
 $LAST_OCTET IN PTR ns.$DOMAIN.
 EOF
 
-        sudo chown bind:bind /etc/bind/$FWD_FILE /etc/bind/$REV_FILE
-        sudo named-checkconf && log_success "Konfiguracija ispravna." || log_error "Greška u DNS sintaksi."
-        sudo systemctl restart bind9
-        
-        echo -e "\n--- TESTNE NAREDBE (KOPIRAJ U DRUGI TERMINAL) ---"
-        echo "1. Provjera Forward: nslookup $DOMAIN $SERVER_IP"
-        echo "2. Provjera Reverse: nslookup $SERVER_IP $SERVER_IP"
-        echo "3. Provjera datoteke zone: named-checkzone $DOMAIN /etc/bind/$FWD_FILE"
-        pause
-        ;;
+    ufw allow 53/tcp && ufw allow 53/udp
+    chown bind:bind /etc/bind/db.$DOMAIN /etc/bind/db.rev
+    systemctl restart bind9
+    log_success "DNS (Bind9) podignut. Port 53 otvoren."
+    
+    echo -e "\n${BOLD}TESTNE NAREDBE:${NC}"
+    echo "• nslookup $DOMAIN localhost"
+    echo "• named-checkconf /etc/bind/named.conf.local"
+    pause
+}
 
-    3)
-        echo "--- KONFIGURACIJA FTP (VSFTPD) - LV10 ---"
-        setup_ip
-        read -p "Unesite korisničko ime (vježba: fifi): " FTP_USER
-        read -s -p "Unesite lozinku: " FTP_PASS; echo
+# --- MODUL 4: FTP (VSFTPD) ---
+setup_ftp() {
+    log_step "KONFIGURACIJA FTP SERVERA (VSFTPD)"
+    read -p "Korisnik: " FTP_USER
+    read -s -p "Lozinka: " FTP_PASS; echo
 
-        log_info "Instalacija VSFTPD..."
-        sudo apt update && sudo apt install vsftpd -y
-        sudo cp /etc/vsftpd.conf /etc/vsftpd.conf.bak
+    apt update && apt install vsftpd -y
 
-        cat <<EOF | sudo tee /etc/vsftpd.conf
+    cat <<EOF > /etc/vsftpd.conf
 listen=YES
 listen_ipv6=NO
 anonymous_enable=NO
@@ -152,50 +169,80 @@ local_enable=YES
 write_enable=YES
 chroot_local_user=YES
 allow_writeable_chroot=YES
-ftpd_banner=Dobro došli na FTP servis!
 user_sub_token=\$USER
 local_root=/home/\$USER/ftp
 userlist_enable=YES
 userlist_file=/etc/vsftpd.userlist
 userlist_deny=NO
+pasv_enable=YES
+pasv_min_port=10000
+pasv_max_port=10100
 EOF
 
-        # Korisnik i dozvole (Točno prema koraku 3.2 u PDF-u)
-        sudo useradd -m -s /bin/bash $FTP_USER
-        echo "$FTP_USER:$FTP_PASS" | sudo chpasswd
-        echo "$FTP_USER" | sudo tee -a /etc/vsftpd.userlist
-        
-        sudo mkdir -p /home/$FTP_USER/ftp/dupload
-        sudo chmod 755 /home /home/$FTP_USER /home/$FTP_USER/ftp
-        sudo chown -R $FTP_USER:$FTP_USER /home/$FTP_USER/ftp/dupload
-        sudo chmod 777 /home/$FTP_USER/ftp/dupload
+    useradd -m -s /bin/bash "$FTP_USER"
+    echo "$FTP_USER:$FTP_PASS" | chpasswd
+    echo "$FTP_USER" > /etc/vsftpd.userlist
 
-        echo "Test datoteka za LV10" | sudo tee /home/$FTP_USER/ftp/dupload/test.txt
-        sudo systemctl restart vsftpd
-        
-        echo -e "\n--- TESTNE NAREDBE (KOPIRAJ U DRUGI TERMINAL) ---"
-        echo "1. Lokalni test: ftp localhost"
-        echo "2. Provjera porta 21: sudo netstat -tunlp | grep :21"
-        echo "3. Status servisa: sudo systemctl status vsftpd"
-        pause
-        ;;
+    mkdir -p "/home/$FTP_USER/ftp/upload"
+    chown -R "$FTP_USER:$FTP_USER" "/home/$FTP_USER/ftp/upload"
+    chmod 550 "/home/$FTP_USER/ftp"
+    chmod 770 "/home/$FTP_USER/ftp/upload"
 
-    4)
-        echo "--- KONFIGURACIJA SSH - LV11 ---"
-        setup_ip
-        log_info "Instalacija OpenSSH servera..."
-        sudo apt update && sudo apt install openssh-server -y
-        
-        sudo systemctl enable ssh
-        sudo systemctl start ssh
-        
-        log_success "SSH je spreman na $SERVER_IP."
-        echo -e "\n--- TESTNE NAREDBE (KOPIRAJ U DRUGI TERMINAL) ---"
-        echo "1. Spajanje: ssh $USER@$SERVER_IP"
-        echo "2. Provjera porta 22: ss -lnt | grep :22"
-        pause
-        ;;
+    ufw allow 20/tcp && ufw allow 21/tcp && ufw allow 10000:10100/tcp
+    systemctl restart vsftpd
+    log_success "FTP spreman. Pasivni portovi 10000-10100 otvoreni."
+    pause
+}
 
-    5) exit 0 ;;
-    *) log_error "Pogrešan unos."; sleep 1; $0 ;;
-esac
+# --- MODUL 5: SSH (OPENSSH) ---
+setup_ssh() {
+    log_step "KONFIGURACIJA SSH"
+    apt update && apt install openssh-server -y
+    ufw allow 22/tcp
+    systemctl enable --now ssh
+    log_success "SSH klijent/server konfiguriran. Port 22 otvoren."
+
+    echo -e "\n${BOLD}WINDOWS POWERSHELL QUICK-START:${NC}"
+    echo "• Instalacija: Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"
+    echo "• Spajanje: ssh $(whoami)@${SERVER_IP:-VAŠA_IP}"
+    pause
+}
+
+# --- MODUL 7: FIREWALL SHUTDOWN ---
+kill_firewall() {
+    log_warn "ISKLJUČIVANJE FIREWALL-A (SIGURNOST ĆE BITI KOMPROMITIRANA)"
+    ufw disable
+    log_success "UFW (Uncomplicated Firewall) je isključen."
+    pause
+}
+
+# --- GLAVNI CIKLUS ---
+check_root
+
+while true; do
+    clear
+    print_banner
+    echo -e "${CYAN}┌────────────────────────────────────────────────────────┐${NC}"
+    echo -e "  ${YELLOW}1)${NC} KONFIGURACIJA STATIC IP (ENS33...)"
+    echo -e "  ${YELLOW}2)${NC} DHCP SERVER (KEA)"
+    echo -e "  ${YELLOW}3)${NC} DNS SERVER (BIND9)"
+    echo -e "  ${YELLOW}4)${NC} FTP SERVER (VSFTPD)"
+    echo -e "  ${YELLOW}5)${NC} SSH SERVER & WINDOWS POWERSHELL"
+    echo -e "  ${YELLOW}6)${NC} FIREWALL: RESETIRAJ & DOPUSTI SVE PORTOVE"
+    echo -e "  ${YELLOW}7)${NC} FIREWALL: POTPUNO UGASI (OFF)"
+    echo -e "  ${YELLOW}8)${NC} IZLAZ"
+    echo -e "${CYAN}└────────────────────────────────────────────────────────┘${NC}"
+    read -p "Odaberite broj zadatka: " opt
+
+    case $opt in
+        1) setup_static_ip ;;
+        2) setup_dhcp ;;
+        3) setup_dns ;;
+        4) setup_ftp ;;
+        5) setup_ssh ;;
+        6) ufw --force enable && ufw default allow incoming && log_success "UFW omogućen u 'Allow' modu." && pause ;;
+        7) kill_firewall ;;
+        8) log_info "Skripta završena. Sretno na natjecanju!"; exit 0 ;;
+        *) log_error "Pogrešan odabir."; sleep 1 ;;
+    esac
+done
