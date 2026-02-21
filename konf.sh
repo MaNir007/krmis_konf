@@ -242,59 +242,85 @@ pause
 
 # ================= FTP =================
 setup_ftp() {
-log_step "FTP SERVER (VSFTPD)"
+    log_step "FTP SERVER (VSFTPD) - DETALJNA KONFIGURACIJA"
 
-    while [[ -z "${FTP_USER:-}" ]]; do read -p "$(echo -e "${YELLOW}FTP korisnik${NC} (npr. ftpadmin): ")" FTP_USER; done
+    # 1. Prikupljanje podataka
+    while [[ -z "${FTP_USER:-}" ]]; do read -p "$(echo -e "${YELLOW}FTP korisnik${NC} (umjesto 'fifi'): ")" FTP_USER; done
     while [[ -z "${FTP_PASS:-}" ]]; do 
-        read -s -p "$(echo -e "${YELLOW}Lozinka${NC} (neće biti vidljivo): ")" FTP_PASS
+        read -s -p "$(echo -e "${YELLOW}Lozinka za $FTP_USER${NC}: ")" FTP_PASS
         echo
     done
+    while [[ -z "${FTP_DIR_NAME:-}" ]]; do read -p "$(echo -e "${YELLOW}Ime poddirektorija${NC} (umjesto 'dupload'): ")" FTP_DIR_NAME; done
+    while [[ -z "${FTP_MSG:-}" ]]; do read -p "$(echo -e "${YELLOW}Sadržaj testne datoteke${NC}: ")" FTP_MSG; done
 
     apt update
-    apt install -y vsftpd
+    apt install -y vsftpd net-tools
 
-    # Konfiguracija vsftpd
-    backup_file /etc/vsftpd.conf
+    # 2. Konfiguracija FTP servisa
+    log_info "Konfiguracija /etc/vsftpd.conf..."
+    [ -f /etc/vsftpd.conf ] && cp /etc/vsftpd.conf /etc/vsftpd.conf.orig
+    
     cat <<EOF > /etc/vsftpd.conf
-listen=NO
-listen_ipv6=YES
+listen=YES
+listen_ipv6=NO
 anonymous_enable=NO
 local_enable=YES
 write_enable=YES
-local_umask=022
-dirmessage_enable=YES
-use_localtime=YES
-xferlog_enable=YES
-connect_from_port_20=YES
 chroot_local_user=YES
+ftpd_banner=Dobro došli na FTP servis!
+user_sub_token=\$USER
+local_root=/home/\$USER/ftp
+userlist_enable=YES
+userlist_file=/etc/vsftpd.userlist
+userlist_deny=NO
 allow_writeable_chroot=YES
-secure_chroot_dir=/var/run/vsftpd/empty
-pam_service_name=vsftpd
+pasv_min_port=40000
+pasv_max_port=40100
 EOF
 
+    # 3. Kreiranje korisnika i dodjela prava
+    log_info "Kreiranje korisnika $FTP_USER..."
     if id "$FTP_USER" &>/dev/null; then
-        log_warn "Korisnik $FTP_USER već postoji. Ažuriram lozinku."
+        echo "$FTP_USER:$FTP_PASS" | chpasswd
     else
         useradd -m -s /bin/bash "$FTP_USER"
+        echo "$FTP_USER:$FTP_PASS" | chpasswd
     fi
-    echo "$FTP_USER:$FTP_PASS" | chpasswd
 
+    # Dodavanje u userlist
+    echo "$FTP_USER" | tee -a /etc/vsftpd.userlist
+
+    # Postavljanje direktorija i prava (755 prema uputama)
+    log_info "Postavljanje strukture direktorija..."
+    mkdir -p "/home/$FTP_USER/ftp/$FTP_DIR_NAME"
+    
+    chmod 755 /home
+    chmod 755 "/home/$FTP_USER"
+    chmod 755 "/home/$FTP_USER/ftp"
+    
+    # 4. Kreiranje testne datoteke
+    echo "$FTP_MSG" > "/home/$FTP_USER/ftp/$FTP_DIR_NAME/test_download.txt"
+    
+    # Postavljanje vlasništva nad upload direktorijem
+    chown -R "$FTP_USER:$FTP_USER" "/home/$FTP_USER/ftp/$FTP_DIR_NAME"
+
+    # Restart i provjera
     systemctl restart vsftpd
-    log_success "FTP server konfiguriran i pokrenut."
+    log_success "FTP servis je konfiguriran."
 
-echo -e "\n${BOLD}STATUS:${NC}"
-systemctl status vsftpd --no-pager
-ss -tulpn | grep 21 || true
+    echo -e "\n${BOLD}PROVJERA STATUSA:${NC}"
+    vsftpd /etc/vsftpd.conf || true
+    netstat -tuln | grep :21 || true
 
-echo -e "\n${BOLD}LINUX SPAJANJE:${NC}"
-echo "ftp $SERVER_IP"
-echo "lftp $SERVER_IP"
+    echo -e "\n${BOLD}LINUX SPAJANJE:${NC}"
+    echo "ftp $SERVER_IP"
+    echo "lftp -u $FTP_USER,$FTP_PASS $SERVER_IP"
 
-echo -e "\n${BOLD}WINDOWS SPAJANJE:${NC}"
-echo "FileZilla → Host: $SERVER_IP"
-echo "cmd → ftp $SERVER_IP"
+    echo -e "\n${BOLD}WINDOWS SPAJANJE:${NC}"
+    echo "FileZilla → Host: $SERVER_IP, User: $FTP_USER, Pass: $FTP_PASS"
+    echo "cmd → ftp $SERVER_IP"
 
-pause
+    pause
 }
 
 # ================= SSH =================
@@ -311,13 +337,15 @@ echo -e "\n${BOLD}STATUS:${NC}"
 systemctl status ssh --no-pager
 ss -tulpn | grep 22 || true
 
-echo -e "\n${BOLD}LINUX/MAC:${NC}"
-echo "ssh korisnik@$SERVER_IP"
+    echo -e "\n${BOLD}LINUX / MAC SPAJANJE:${NC}"
+    echo "ssh $USER@$SERVER_IP"
+    echo "ssh root@$SERVER_IP"
 
-echo -e "\n${BOLD}WINDOWS:${NC}"
-echo "PowerShell → ssh korisnik@$SERVER_IP"
+    echo -e "\n${BOLD}WINDOWS SPAJANJE:${NC}"
+    echo "PowerShell → ssh $USER@$SERVER_IP"
+    echo "Putty → Host: $SERVER_IP, Port: 22"
 
-pause
+    pause
 }
 
 # ================= FIREWALL =================
