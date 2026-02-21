@@ -66,11 +66,17 @@ setup_static_ip() {
 log_step "TRAJNA STATIC IP (NETPLAN)"
 
 ip -brief link show
-read -p "Interface: " IFACE
-read -p "IP adresa: " IP
-read -p "CIDR (24): " MASK
-read -p "Gateway: " GW
-read -p "DNS: " DNS
+    while [[ -z "${IFACE:-}" ]]; do read -p "$(echo -e "${YELLOW}Interface${NC} (npr. eth0, ens33): ")" IFACE; done
+    while [[ -z "${IP:-}" ]]; do read -p "$(echo -e "${YELLOW}IP adresa${NC} (npr. 192.168.1.10): ")" IP; done
+    while [[ -z "${MASK:-}" ]]; do read -p "$(echo -e "${YELLOW}CIDR${NC} (npr. 24): ")" MASK; done
+    while [[ -z "${GW:-}" ]]; do read -p "$(echo -e "${YELLOW}Gateway${NC} (npr. 192.168.1.1): ")" GW; done
+    while [[ -z "${DNS:-}" ]]; do read -p "$(echo -e "${YELLOW}DNS${NC} (npr. 8.8.8.8): ")" DNS; done
+
+    echo -e "\n${RED}${BOLD}UPOZORENJE:${NC} Promjena IP adrese može prekinuti vašu SSH sesiju!"
+    echo -e "${BOLD}Spreman za primjenu:${NC} $IP/$MASK na $IFACE (GW: $GW, DNS: $DNS)"
+    read -p "Želiš li nastaviti? [Y/n]: " confirm
+    [[ "${confirm,,}" == "n" ]] && { log_info "Otkazano."; pause; return; }
+
 
 NETPLAN="/etc/netplan/01-static.yaml"
 backup_file "$NETPLAN"
@@ -108,11 +114,14 @@ pause
 setup_dhcp() {
 log_step "DHCP SERVER (KEA)"
 
-[ -z "$SERVER_IP" ] && read -p "IP servera: " SERVER_IP
-read -p "Network: " NETWORK
-read -p "CIDR: " MASK
-read -p "Pool start: " START
-read -p "Pool end: " END
+    if [ -z "$SERVER_IP" ]; then
+        while [[ -z "${SERVER_IP:-}" ]]; do read -p "$(echo -e "${YELLOW}IP servera${NC} (npr. 192.168.1.10): ")" SERVER_IP; done
+    fi
+    while [[ -z "${NETWORK:-}" ]]; do read -p "$(echo -e "${YELLOW}Network${NC} (npr. 192.168.1.0): ")" NETWORK; done
+    while [[ -z "${MASK:-}" ]]; do read -p "$(echo -e "${YELLOW}CIDR${NC} (npr. 24): ")" MASK; done
+    while [[ -z "${START:-}" ]]; do read -p "$(echo -e "${YELLOW}Pool start${NC} (npr. 192.168.1.100): ")" START; done
+    while [[ -z "${END:-}" ]]; do read -p "$(echo -e "${YELLOW}Pool end${NC} (npr. 192.168.1.200): ")" END; done
+
 
 apt update
 apt install -y kea-dhcp4-server
@@ -165,8 +174,11 @@ pause
 setup_dns() {
 log_step "DNS SERVER (BIND9)"
 
-[ -z "$SERVER_IP" ] && read -p "IP servera: " SERVER_IP
-read -p "Domena: " DOMAIN
+    if [ -z "$SERVER_IP" ]; then
+        while [[ -z "${SERVER_IP:-}" ]]; do read -p "$(echo -e "${YELLOW}IP servera${NC} (npr. 192.168.1.10): ")" SERVER_IP; done
+    fi
+    while [[ -z "${DOMAIN:-}" ]]; do read -p "$(echo -e "${YELLOW}Domena${NC} (npr. moj-server.local): ")" DOMAIN; done
+
 
 REV=$(echo "$SERVER_IP" | awk -F. '{print $3"."$2"."$1}')
 LAST=$(echo "$SERVER_IP" | awk -F. '{print $4}')
@@ -232,18 +244,43 @@ pause
 setup_ftp() {
 log_step "FTP SERVER (VSFTPD)"
 
-read -p "FTP korisnik: " USER
-read -s -p "Lozinka: " PASS; echo
+    while [[ -z "${FTP_USER:-}" ]]; do read -p "$(echo -e "${YELLOW}FTP korisnik${NC} (npr. ftpadmin): ")" FTP_USER; done
+    while [[ -z "${FTP_PASS:-}" ]]; do 
+        read -s -p "$(echo -e "${YELLOW}Lozinka${NC} (neće biti vidljivo): ")" FTP_PASS
+        echo
+    done
 
-apt update
-apt install -y vsftpd
+    apt update
+    apt install -y vsftpd
 
-useradd -m -s /bin/bash "$USER"
-echo "$USER:$PASS" | chpasswd
+    # Konfiguracija vsftpd
+    backup_file /etc/vsftpd.conf
+    cat <<EOF > /etc/vsftpd.conf
+listen=NO
+listen_ipv6=YES
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+local_umask=022
+dirmessage_enable=YES
+use_localtime=YES
+xferlog_enable=YES
+connect_from_port_20=YES
+chroot_local_user=YES
+allow_writeable_chroot=YES
+secure_chroot_dir=/var/run/vsftpd/empty
+pam_service_name=vsftpd
+EOF
 
-systemctl restart vsftpd
+    if id "$FTP_USER" &>/dev/null; then
+        log_warn "Korisnik $FTP_USER već postoji. Ažuriram lozinku."
+    else
+        useradd -m -s /bin/bash "$FTP_USER"
+    fi
+    echo "$FTP_USER:$FTP_PASS" | chpasswd
 
-log_success "FTP aktivan."
+    systemctl restart vsftpd
+    log_success "FTP server konfiguriran i pokrenut."
 
 echo -e "\n${BOLD}STATUS:${NC}"
 systemctl status vsftpd --no-pager
@@ -294,6 +331,7 @@ ufw allow 22
 ufw allow 53
 ufw allow 67/udp
 ufw allow 21
+ufw allow 40000:40100/tcp
 ufw --force enable
 
 log_success "Firewall postavljen (secure)."
@@ -305,6 +343,12 @@ kill_firewall() {
 log_warn "GASI SE FIREWALL"
 ufw disable
 pause
+}
+
+view_logs() {
+    log_step "PREGLED LOGOVA (/var/log/service_automator.log)"
+    tail -n 50 "$LOG_FILE"
+    pause
 }
 
 # ================= MAIN =================
@@ -320,9 +364,10 @@ echo "4) FTP"
 echo "5) SSH"
 echo "6) Firewall Secure"
 echo "7) Firewall OFF"
-echo "8) Exit${NC}"
+echo "8) Pregled Logova"
+echo "9) Exit${NC}"
 echo
-read -p "Odaberi opciju: " opt
+read -p "$(echo -e "${YELLOW}Odaberi opciju [1-9]:${NC} ")" opt
 
 case $opt in
 1) setup_static_ip ;;
@@ -332,7 +377,8 @@ case $opt in
 5) setup_ssh ;;
 6) setup_firewall_secure ;;
 7) kill_firewall ;;
-8) exit 0 ;;
+8) view_logs ;;
+9) exit 0 ;;
 *) log_error "Pogrešan odabir"; sleep 1 ;;
 esac
 done
