@@ -1,0 +1,209 @@
+###############################################################################
+#             VODIČ ZA KONFIGURACIJU MREŽNIH SERVISA (DEBIAN/MINT)            #
+#                    TEHNIČKI PODSJETNIK I TIPS & TRICKS                      #
+###############################################################################
+
+===============================================================================
+1. STATIČKI IP (NETPLAN)
+===============================================================================
+Putanja: /etc/netplan/01-static.yaml
+
+Naredbe:
+$ sudo ip a                            # Provjera naziva interface-a
+$ sudo nano /etc/netplan/01-static.yaml # Uređivanje
+$ sudo netplan apply                   # Primjena postavki
+
+Konfiguracija:
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    UPISI_INTERFACE:
+      dhcp4: no
+      addresses:
+        - UPISI_IP_SERVERA/UPISI_MASKU
+      routes:
+        - to: default
+          via: UPISI_GATEWAY
+      nameservers:
+        addresses: [UPISI_DNS]
+
+TIPS & TRICKS:
+- PAZI NA INDENTACIJU! YAML datoteke koriste razmake (space), ne tabove.
+- Ako SSH-aš na server, 'netplan apply' može prekinuti vezu ako promijeniš IP.
+- Uvijek provjeri sučelje sa 'ip link show' (npr. ens33, eth0).
+
+===============================================================================
+2. DHCP SERVER (KEA DHCP)
+===============================================================================
+Putanja: /etc/kea/kea-dhcp4.conf
+
+Naredbe:
+$ sudo apt install kea-dhcp4-server
+$ sudo nano /etc/kea/kea-dhcp4.conf
+$ sudo kea-dhcp4 -t /etc/kea/kea-dhcp4.conf # Testiranje sintakse (VAŽNO!)
+$ sudo systemctl restart kea-dhcp4-server
+
+Konfiguracija:
+{
+ "Dhcp4": {
+   "interfaces-config": { "interfaces": ["*"] },
+   "lease-database": { "type": "memfile" },
+   "subnet4": [{
+     "subnet": "UPISI_MREZU/UPISI_MASKU",
+     "pools": [{ "pool": "UPISI_START_IP - UPISI_END_IP" }],
+     "option-data": [
+       { "name": "routers", "data": "UPISI_IP_SERVERA" },
+       { "name": "domain-name-servers", "data": "UPISI_IP_SERVERA" }
+     ]
+   }]
+ }
+}
+
+TIPS & TRICKS:
+- Provjera je li port 67 otvoren: 'sudo ss -ulpn | grep 67'.
+- Pregled dodijeljenih adresa: 'cat /var/lib/kea/kea-leases4.csv'.
+- Ako server ne starta, logovi su u 'journalctl -u kea-dhcp4-server'.
+
+===============================================================================
+3. DNS POSLUŽITELJ (BIND9)
+===============================================================================
+Putanje: /etc/bind/named.conf.local, /etc/bind/db.domena, /etc/bind/db.rev
+
+Naredbe:
+$ sudo apt install bind9 bind9utils dnsutils
+$ sudo named-checkconf                              # Provjera configa
+$ sudo named-checkzone UPISI_DOMENU /etc/bind/db.fajl # Provjera zone
+$ sudo systemctl restart bind9
+
+Konfiguracija (/etc/bind/named.conf.local):
+zone "UPISI_DOMENU" {
+ type master;
+ file "/etc/bind/db.UPISI_DOMENU";
+};
+zone "UPISI_REVERSE.in-addr.arpa" {
+ type master;
+ file "/etc/bind/db.rev";
+};
+
+Forward Zona (/etc/bind/db.UPISI_DOMENU):
+$TTL 604800
+@ IN SOA ns.UPISI_DOMENU. root.UPISI_DOMENU. ( UPISI_DATUM_01 604800 86400 2419200 604800 )
+@ IN NS ns.UPISI_DOMENU.
+ns IN A UPISI_IP_SERVERA
+@ IN A UPISI_IP_SERVERA
+www IN CNAME @
+
+TIPS & TRICKS:
+- Ne zaboravi TOČKU (.) na kraju FQDN-a (npr. ns.mojadomena.hr.).
+- Serijski broj mora se povećati kod svake promjene (format YYYYMMDDNN).
+- Testiranje: 'dig @localhost UPISI_DOMENU' ili 'nslookup UPISI_DOMENU localhost'.
+
+===============================================================================
+4. FTP SERVIS (VSFTPD)
+===============================================================================
+Putanja: /etc/vsftpd.conf, /etc/vsftpd.userlist
+
+Naredbe:
+$ sudo apt install vsftpd net-tools
+$ sudo adduser UPISI_USER
+$ echo "UPISI_USER" | sudo tee -a /etc/vsftpd.userlist
+$ sudo systemctl restart vsftpd
+
+Konfiguracija (/etc/vsftpd.conf):
+listen=YES
+listen_ipv6=NO
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+chroot_local_user=YES
+user_sub_token=$USER
+local_root=/home/$USER/ftp
+userlist_enable=YES
+userlist_file=/etc/vsftpd.userlist
+userlist_deny=NO
+allow_writeable_chroot=YES
+
+TIPS & TRICKS:
+- Prava na direktorijima su KRITIČNA. Root (/home/user/ftp) mora biti 755.
+- Koristi 'chmod 755 /home/UPISI_USER/ftp' za ispravan rad chroot-a.
+- Ako se ne možeš spojiti sa Windowsa, provjeri Pasivni mode (Pasv portove).
+
+===============================================================================
+5. FIREWALL (UFW)
+===============================================================================
+Naredbe:
+$ sudo ufw default deny incoming
+$ sudo ufw default allow outgoing
+$ sudo ufw allow 22                     # SSH
+$ sudo ufw allow 53                     # DNS
+$ sudo ufw allow 67/udp                 # DHCP
+$ sudo ufw allow 21/tcp                 # FTP
+$ sudo ufw allow 40000:40100/tcp        # FTP Pasivni portovi
+$ sudo ufw enable
+$ sudo ufw status verbose
+
+TIPS & TRICKS:
+- Uvijek prvo dozvoli port 22 (SSH) prije nego klikneš 'enable', inače ćeš se izbaciti.
+- 'ufw reset' briše sve i vraća na tvorničke postavke.
+- Ako nešto ne radi, 'sudo ufw disable' je prva dijagnostika da vidiš smeta li vatrozid.
+
+===============================================================================
+6. PROVJERA VEZE (TESTIRANJE S KLIJENTA)
+===============================================================================
+
+-------------------------------------------------------------------------------
+A) DHCP TEST (Dobivanje IP adrese)
+-------------------------------------------------------------------------------
+LINUX MINT:
+$ sudo dhclient -v -r       # Otpuštanje trenutne adrese
+$ sudo dhclient -v          # Traženje nove adrese
+$ ip a                      # Potvrda dobivene IP adrese
+
+WINDOWS:
+> ipconfig /release         # Otpuštanje adrese
+> ipconfig /renew           # Traženje nove adrese
+> ipconfig /all             # Detaljna provjera IP-a, Gateway-a i DNS-a
+
+-------------------------------------------------------------------------------
+B) DNS TEST (Forward & Reverse)
+-------------------------------------------------------------------------------
+LINUX MINT (Koristimo 'dig' ili 'nslookup'):
+$ dig @UPISI_IP_SERVERA UPISI_DOMENU            # Forward (A record)
+$ dig @UPISI_IP_SERVERA www.UPISI_DOMENU        # Forward (CNAME)
+$ dig -x UPISI_IP_SERVERA @UPISI_IP_SERVERA     # REVERSE (PTR)
+
+WINDOWS:
+> nslookup UPISI_DOMENU UPISI_IP_SERVERA        # Forward
+> nslookup UPISI_IP_SERVERA UPISI_IP_SERVERA    # REVERSE
+
+-------------------------------------------------------------------------------
+C) SSH TEST (Udaljeni pristup)
+-------------------------------------------------------------------------------
+LINUX MINT:
+$ ssh UPISI_USER@UPISI_IP_SERVERA
+
+WINDOWS (CMD / PowerShell):
+> ssh UPISI_USER@UPISI_IP_SERVERA
+(Ako traži 'prijavu fingerprinta', upišite 'yes')
+
+-------------------------------------------------------------------------------
+D) FTP TEST (Prijenos datoteka)
+-------------------------------------------------------------------------------
+LINUX MINT:
+$ ftp UPISI_IP_SERVERA
+(Zatim unijeti korisničko ime i lozinku)
+$ lftp -u UPISI_USER,UPISI_LOZINKA UPISI_IP_SERVERA
+
+WINDOWS:
+> ftp UPISI_IP_SERVERA
+(Interaktivno u CMD-u)
+ILI FileZilla/WinSCP: Host: UPISI_IP_SERVERA, Port: 21
+
+===============================================================================
+7. OPĆI SAVJETI ZA NATJECANJE
+===============================================================================
+1. LOGOVI SU PRIJATELJI: 'tail -f /var/log/syslog' prati sve servise u realnom vremenu.
+2. STATUSI: 'systemctl status servis' ti točno kaže na kojoj liniji configa si napravio tipfeler.
+3. MREŽA: Ako klijent ne dobiva DHCP, provjeri jesu li virtualne kartice u istom LAN segmentu.
+4. PING: Ako ping ne radi, a IP-ovi su OK, ugasi firewall na oba računala ('ufw disable' na Mintu, Control Panel na Win).
