@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================================
-# ULTRA SERVICE AUTOMATOR v4.0 - COMPETITION PRO MAX
+# ULTRA SERVICE AUTOMATOR v5.0 - SECURITY & USER EDITION
 # Linux Mint / Debian Server Automation Suite
 # ==========================================================================
 
@@ -41,7 +41,7 @@ pause() {
 
 check_root() {
     if [ "$EUID" -ne 0 ]; then
-        log_error "Pokreni skriptu sa sudo."
+        log_error "Pokreni skriptu sa sudo privilegijama."
         exit 1
     fi
 }
@@ -56,7 +56,7 @@ cat << "EOF"
 ██████╔╝   ██║   ██║ ╚████║██║  ██║██║ ╚═╝ ██║██║╚██████╗ 
 ╚═════╝    ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝ ╚═════╝ 
         U L T R A   S E R V I C E   A U T O M A T O R
-                    v4.0 PRO MAX
+                    v5.0 SECURITY PLUS
 EOF
 echo -e "${NC}"
 }
@@ -73,10 +73,8 @@ ip -brief link show
     while [[ -z "${DNS:-}" ]]; do read -p "$(echo -e "${YELLOW}DNS${NC} (npr. 8.8.8.8): ")" DNS; done
 
     echo -e "\n${RED}${BOLD}UPOZORENJE:${NC} Promjena IP adrese može prekinuti vašu SSH sesiju!"
-    echo -e "${BOLD}Spreman za primjenu:${NC} $IP/$MASK na $IFACE (GW: $GW, DNS: $DNS)"
     read -p "Želiš li nastaviti? [Y/n]: " confirm
     [[ "${confirm,,}" == "n" ]] && { log_info "Otkazano."; pause; return; }
-
 
 NETPLAN="/etc/netplan/01-static.yaml"
 backup_file "$NETPLAN"
@@ -99,33 +97,20 @@ EOF
 
 netplan apply
 SERVER_IP="$IP"
-
 log_success "Static IP konfiguriran."
-
-echo -e "\n${BOLD}PROVJERA:${NC}"
-ip a
-ip route
-ping -c 2 8.8.8.8 || true
-
 pause
 }
 
 # ================= DHCP =================
 setup_dhcp() {
 log_step "DHCP SERVER (KEA)"
+    [ -z "$SERVER_IP" ] && read -p "IP servera: " SERVER_IP
+    read -p "Network (npr. 192.168.1.0): " NETWORK
+    read -p "CIDR (npr. 24): " MASK
+    read -p "Pool start: " START
+    read -p "Pool end: " END
 
-    if [ -z "$SERVER_IP" ]; then
-        while [[ -z "${SERVER_IP:-}" ]]; do read -p "$(echo -e "${YELLOW}IP servera${NC} (npr. 192.168.1.10): ")" SERVER_IP; done
-    fi
-    while [[ -z "${NETWORK:-}" ]]; do read -p "$(echo -e "${YELLOW}Network${NC} (npr. 192.168.1.0): ")" NETWORK; done
-    while [[ -z "${MASK:-}" ]]; do read -p "$(echo -e "${YELLOW}CIDR${NC} (npr. 24): ")" MASK; done
-    while [[ -z "${START:-}" ]]; do read -p "$(echo -e "${YELLOW}Pool start${NC} (npr. 192.168.1.100): ")" START; done
-    while [[ -z "${END:-}" ]]; do read -p "$(echo -e "${YELLOW}Pool end${NC} (npr. 192.168.1.200): ")" END; done
-
-
-apt update
-apt install -y kea-dhcp4-server
-
+apt update && apt install -y kea-dhcp4-server
 backup_file /etc/kea/kea-dhcp4.conf
 
 cat <<EOF > /etc/kea/kea-dhcp4.conf
@@ -145,61 +130,29 @@ cat <<EOF > /etc/kea/kea-dhcp4.conf
 }
 EOF
 
-kea-dhcp4 -t /etc/kea/kea-dhcp4.conf
 systemctl restart kea-dhcp4-server
-
 log_success "DHCP pokrenut."
-
-echo -e "\n${BOLD}STATUS:${NC}"
-systemctl status kea-dhcp4-server --no-pager
-ss -ulpn | grep 67 || true
-
-echo -e "\n${BOLD}LEASEOVI:${NC}"
-cat /var/lib/kea/kea-leases4.csv 2>/dev/null || echo "Još nema leaseova."
-
-echo -e "\n${BOLD}TEST NA LINUX KLIJENTU:${NC}"
-echo "sudo dhclient -v"
-echo "ip a"
-echo "ip route"
-
-echo -e "\n${BOLD}TEST NA WINDOWS KLIJENTU:${NC}"
-echo "ipconfig /release"
-echo "ipconfig /renew"
-echo "ipconfig /all"
-
 pause
 }
 
 # ================= DNS =================
 setup_dns() {
 log_step "DNS SERVER (BIND9)"
-
-    if [ -z "$SERVER_IP" ]; then
-        while [[ -z "${SERVER_IP:-}" ]]; do read -p "$(echo -e "${YELLOW}IP servera${NC} (npr. 192.168.1.10): ")" SERVER_IP; done
-    fi
-    while [[ -z "${DOMAIN:-}" ]]; do read -p "$(echo -e "${YELLOW}Domena${NC} (npr. moj-server.local): ")" DOMAIN; done
-
+    [ -z "$SERVER_IP" ] && read -p "IP servera: " SERVER_IP
+    read -p "Domena (npr. moj-server.local): " DOMAIN
 
 REV=$(echo "$SERVER_IP" | awk -F. '{print $3"."$2"."$1}')
 LAST=$(echo "$SERVER_IP" | awk -F. '{print $4}')
 
-apt update
-apt install -y bind9 bind9utils dnsutils
-
+apt update && apt install -y bind9 bind9utils dnsutils
 backup_file /etc/bind/named.conf.local
 
 cat <<EOF > /etc/bind/named.conf.local
-zone "$DOMAIN" {
- type master;
- file "/etc/bind/db.$DOMAIN";
-};
-zone "$REV.in-addr.arpa" {
- type master;
- file "/etc/bind/db.rev";
-};
+zone "$DOMAIN" { type master; file "/etc/bind/db.$DOMAIN"; };
+zone "$REV.in-addr.arpa" { type master; file "/etc/bind/db.rev"; };
 EOF
 
-cat <<EOF > /etc/bind/db.$DOMAIN
+cat <<EOF > "/etc/bind/db.$DOMAIN"
 \$TTL 604800
 @ IN SOA ns.$DOMAIN. root.$DOMAIN. ( $(date +%Y%m%d)01 604800 86400 2419200 604800 )
 @ IN NS ns.$DOMAIN.
@@ -215,166 +168,107 @@ cat <<EOF > /etc/bind/db.rev
 $LAST IN PTR $DOMAIN.
 EOF
 
-named-checkconf
-named-checkzone "$DOMAIN" /etc/bind/db.$DOMAIN
-
 systemctl restart bind9
-
 log_success "DNS aktivan."
-
-echo -e "\n${BOLD}STATUS:${NC}"
-systemctl status bind9 --no-pager
-ss -tulpn | grep 53 || true
-
-echo -e "\n${BOLD}FORWARD TEST:${NC}"
-dig @$SERVER_IP $DOMAIN
-dig @$SERVER_IP www.$DOMAIN
-
-echo -e "\n${BOLD}REVERSE TEST:${NC}"
-dig -x $SERVER_IP @$SERVER_IP
-
-echo -e "\n${BOLD}WINDOWS TEST:${NC}"
-echo "nslookup $DOMAIN $SERVER_IP"
-echo "nslookup $SERVER_IP $SERVER_IP"
-
 pause
 }
 
 # ================= FTP =================
 setup_ftp() {
-    log_step "FTP SERVER (VSFTPD) - DETALJNA KONFIGURACIJA"
+    log_step "FTP SERVER (VSFTPD)"
+    read -p "FTP korisnik: " FTP_USER
+    read -s -p "Lozinka: " FTP_PASS; echo
+    read -p "Ime poddirektorija: " FTP_DIR_NAME
 
-    # 1. Prikupljanje podataka
-    while [[ -z "${FTP_USER:-}" ]]; do read -p "$(echo -e "${YELLOW}FTP korisnik${NC} (umjesto 'fifi'): ")" FTP_USER; done
-    while [[ -z "${FTP_PASS:-}" ]]; do 
-        read -s -p "$(echo -e "${YELLOW}Lozinka za $FTP_USER${NC}: ")" FTP_PASS
-        echo
-    done
-    while [[ -z "${FTP_DIR_NAME:-}" ]]; do read -p "$(echo -e "${YELLOW}Ime poddirektorija${NC} (umjesto 'dupload'): ")" FTP_DIR_NAME; done
-    while [[ -z "${FTP_MSG:-}" ]]; do read -p "$(echo -e "${YELLOW}Sadržaj testne datoteke${NC}: ")" FTP_MSG; done
+    apt update && apt install -y vsftpd
+    backup_file /etc/vsftpd.conf
 
-    apt update
-    apt install -y vsftpd net-tools
-
-    # 2. Konfiguracija FTP servisa
-    log_info "Konfiguracija /etc/vsftpd.conf..."
-    [ -f /etc/vsftpd.conf ] && cp /etc/vsftpd.conf /etc/vsftpd.conf.orig
-    
     cat <<EOF > /etc/vsftpd.conf
 listen=YES
-listen_ipv6=NO
 anonymous_enable=NO
 local_enable=YES
 write_enable=YES
 chroot_local_user=YES
-ftpd_banner=Dobro došli na FTP servis!
+allow_writeable_chroot=YES
 user_sub_token=\$USER
 local_root=/home/\$USER/ftp
-userlist_enable=YES
-userlist_file=/etc/vsftpd.userlist
-userlist_deny=NO
-allow_writeable_chroot=YES
 pasv_min_port=40000
 pasv_max_port=40100
 EOF
 
-    # 3. Kreiranje korisnika i dodjela prava
-    log_info "Kreiranje korisnika $FTP_USER..."
-    if id "$FTP_USER" &>/dev/null; then
-        echo "$FTP_USER:$FTP_PASS" | chpasswd
-    else
-        useradd -m -s /bin/bash "$FTP_USER"
-        echo "$FTP_USER:$FTP_PASS" | chpasswd
-    fi
-
-    # Dodavanje u userlist
-    echo "$FTP_USER" | tee -a /etc/vsftpd.userlist
-
-    # Postavljanje direktorija i prava (755 prema uputama)
-    log_info "Postavljanje strukture direktorija..."
+    id "$FTP_USER" &>/dev/null || useradd -m -s /bin/bash "$FTP_USER"
+    echo "$FTP_USER:$FTP_PASS" | chpasswd
     mkdir -p "/home/$FTP_USER/ftp/$FTP_DIR_NAME"
+    chown -R "$FTP_USER:$FTP_USER" "/home/$FTP_USER/ftp"
     
-    chmod 755 /home
-    chmod 755 "/home/$FTP_USER"
-    chmod 755 "/home/$FTP_USER/ftp"
-    
-    # 4. Kreiranje testne datoteke
-    echo "$FTP_MSG" > "/home/$FTP_USER/ftp/$FTP_DIR_NAME/test_download.txt"
-    
-    # Postavljanje vlasništva nad upload direktorijem
-    chown -R "$FTP_USER:$FTP_USER" "/home/$FTP_USER/ftp/$FTP_DIR_NAME"
-
-    # Restart i provjera
     systemctl restart vsftpd
-    log_success "FTP servis je konfiguriran."
-
-    echo -e "\n${BOLD}PROVJERA STATUSA:${NC}"
-    vsftpd /etc/vsftpd.conf || true
-    netstat -tuln | grep :21 || true
-
-    echo -e "\n${BOLD}LINUX SPAJANJE:${NC}"
-    echo "ftp $SERVER_IP"
-    echo "lftp -u $FTP_USER,$FTP_PASS $SERVER_IP"
-
-    echo -e "\n${BOLD}WINDOWS SPAJANJE:${NC}"
-    echo "FileZilla → Host: $SERVER_IP, User: $FTP_USER, Pass: $FTP_PASS"
-    echo "cmd → ftp $SERVER_IP"
-
+    log_success "FTP konfiguriran."
     pause
 }
 
-# ================= SSH =================
+# ================= SSH (KORISNIČKI PRISTUP) =================
 setup_ssh() {
-log_step "SSH SERVER"
+    log_step "SSH SERVER KONFIGURACIJA"
 
-apt update
-apt install -y openssh-server
-systemctl enable --now ssh
+    apt update && apt install -y openssh-server sudo
 
-log_success "SSH aktivan."
+    # Unos korisnika koji će kreirati SSH sesiju
+    read -p "$(echo -e "${YELLOW}Unesi korisničko ime za SSH (npr. admin): ${NC}")" SSH_USER
 
-echo -e "\n${BOLD}STATUS:${NC}"
-systemctl status ssh --no-pager
-ss -tulpn | grep 22 || true
+    # Provjera/Kreiranje korisnika
+    if ! id "$SSH_USER" &>/dev/null; then
+        log_info "Kreiram novog korisnika $SSH_USER..."
+        useradd -m -s /bin/bash "$SSH_USER"
+        passwd "$SSH_USER"
+        usermod -aG sudo "$SSH_USER"
+        log_success "Korisnik $SSH_USER kreiran i dodan u sudo grupu."
+    else
+        log_info "Korisnik $SSH_USER već postoji. Dodajem ga u sudo grupu..."
+        usermod -aG sudo "$SSH_USER"
+    fi
 
-    echo -e "\n${BOLD}LINUX / MAC SPAJANJE:${NC}"
-    echo "ssh $USER@$SERVER_IP"
-    echo "ssh root@$SERVER_IP"
+    # Sigurnosna konfiguracija SSH-a
+    backup_file /etc/ssh/sshd_config
 
-    echo -e "\n${BOLD}WINDOWS SPAJANJE:${NC}"
-    echo "PowerShell → ssh $USER@$SERVER_IP"
-    echo "Putty → Host: $SERVER_IP, Port: 22"
+    log_info "Primjenjujem sigurnosne postavke (Zabrana roota)..."
+    # Brišemo stare postavke ako postoje da izbjegnemo duplikate
+    sed -i '/^PermitRootLogin/d' /etc/ssh/sshd_config
+    sed -i '/^PasswordAuthentication/d' /etc/ssh/sshd_config
+    sed -i '/^AllowUsers/d' /etc/ssh/sshd_config
 
+    # Upisujemo nove postavke
+    echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
+    echo "AllowUsers $SSH_USER" >> /etc/ssh/sshd_config
+
+    systemctl restart ssh
+    systemctl enable ssh
+
+    log_success "SSH konfiguriran za korisnika: $SSH_USER"
+    log_warn "ROOT LOGIN JE ONEMOGUĆEN. Koristite: ssh $SSH_USER@$SERVER_IP"
     pause
 }
 
 # ================= FIREWALL =================
 setup_firewall_secure() {
 log_step "FIREWALL SECURE MODE"
-
 ufw reset
 ufw default deny incoming
 ufw default allow outgoing
-ufw allow 22
-ufw allow 53
-ufw allow 67/udp
-ufw allow 21
-ufw allow 40000:40100/tcp
+for p in 22 53 67/udp 21 40000:40100/tcp; do ufw allow $p; done
 ufw --force enable
-
-log_success "Firewall postavljen (secure)."
-ufw status verbose
+log_success "Firewall aktivan."
 pause
 }
 
 kill_firewall() {
-log_warn "GASI SE FIREWALL"
 ufw disable
+log_warn "Firewall isključen."
 pause
 }
 
 view_logs() {
-    log_step "PREGLED LOGOVA (/var/log/service_automator.log)"
+    log_step "LOG PREGLED"
     tail -n 50 "$LOG_FILE"
     pause
 }
@@ -385,17 +279,17 @@ check_root
 while true; do
 clear
 print_banner
-echo -e "${CYAN}1) Static IP"
-echo "2) DHCP"
-echo "3) DNS"
-echo "4) FTP"
-echo "5) SSH"
-echo "6) Firewall Secure"
+echo -e "${CYAN}1) Static IP (Netplan)"
+echo "2) DHCP (Kea)"
+echo "3) DNS (Bind9)"
+echo "4) FTP (Vsftpd)"
+echo "5) SSH (Korisnički pristup - Root OFF)"
+echo "6) Firewall Secure (ON)"
 echo "7) Firewall OFF"
 echo "8) Pregled Logova"
 echo "9) Exit${NC}"
 echo
-read -p "$(echo -e "${YELLOW}Odaberi opciju [1-9]:${NC} ")" opt
+read -p "Odaberi opciju [1-9]: " opt
 
 case $opt in
 1) setup_static_ip ;;
