@@ -1,6 +1,6 @@
 ###############################################################################
 #           MASTER ISPITNI VODIČ: TSRB - MREŽNI SERVISI (VMware Edition)      #
-#                      DETALJNA ANALIZA I KORACI                              #
+#                      DETALJNA ANALIZA I KORACI v2.0                         #
 ###############################################################################
 
 ===============================================================================
@@ -11,7 +11,7 @@ Rješenje:
 1. U VMwareu postavi mrežnu na "NAT".
 2. U terminalu kucaj: sudo dhclient (da dobiješ privremeni internet IP).
 3. Instaliraj sve odjednom:
-   sudo apt update && sudo apt install isc-dhcp-server bind9 vsftpd ufw -y
+   sudo apt update && sudo apt install isc-dhcp-server bind9 vsftpd openssh-server ufw -y
 4. VRATI mrežnu na "LAN Segment 1".
 5. Sada kreni s konfiguracijom prema dolje.
 
@@ -21,116 +21,130 @@ Rješenje:
 Putanja: /etc/netplan/01-network-manager-all.yaml (ili slično)
 Naredba: sudo nano /etc/netplan/*.yaml
 
-DETALJNA KONFIGURACIJA:
+Objašnjenje: Server MORA imati fiksnu adresu da bi servisi znali "gdje žive".
 ---------------------------------------------------------
 network:
   version: 2
-  renderer: networkd   # 'networkd' je bolji za servere od NetworkManagera
+  renderer: networkd
   ethernets:
-    ens33:             # Provjeri ime kartice sa 'ip a' (u VMwareu je ens33)
-      dhcp4: no        # ISKLJUČI automatsko traženje adrese
+    ens33:               # Provjeri ime kartice sa 'ip a'
+      dhcp4: no
       addresses:
-        - 172.16.1.20/24  # Tvoja fiksna adresa i maska (255.255.255.0)
+        - 172.16.1.20/24
 ---------------------------------------------------------
 Primjena: sudo netplan apply
-ISPITNI SAVJET: Ako 'netplan apply' zapne, kucaj 'sudo netplan --debug apply' 
-da vidiš gdje je greška u razmacima (indentaciji).
+ISPITNI SAVJET: Razmaci su svetinja. Ako dobiješ grešku, provjeri jesu li svi 
+nivoi poravnati s po dva razmaka (ne koristiti TAB).
 
 ===============================================================================
 2. DHCP (ISC-DHCP-SERVER - Automatsko dijeljenje adresa)
 ===============================================================================
-Datoteka 1: /etc/default/isc-dhcp-server
--> Ovdje samo kažeš na kojoj kartici server "sluša".
+Datoteka 1 (Kartica): sudo nano /etc/default/isc-dhcp-server
 -> Izmjeni: INTERFACESv4="ens33"
 
-Datoteka 2: /etc/dhcp/dhcpd.conf
+Datoteka 2 (Konf): sudo nano /etc/dhcp/dhcpd.conf
 ---------------------------------------------------------
-# Ovi parametri su ključni za Zadatak 1.a (360s/300s)
-default-lease-time 360;   # Vrijeme nakon kojeg klijent mora pitati za produženje
-max-lease-time 300;       # Maksimalno vrijeme zakupa (prema slici)
-
-authoritative;            # Kažeš: "Ja sam jedini i glavni DHCP u ovoj mreži"
+default-lease-time 360;   # Vrijeme produženja (Zadatak 1.a)
+max-lease-time 300;       # Maksimalni zakup (Zadatak 1.a)
+authoritative;            # Ja sam glavni server u segmentu
 
 subnet 172.16.1.0 netmask 255.255.255.0 {
-  range 172.16.1.20 172.16.1.40;         # Opseg adresa
-  option routers 172.16.1.1;             # Gateway (ulaz u druge mreže)
-  option domain-name-servers 172.16.1.20; # Tvoja IP adresa (jer si ti DNS)
+  range 172.16.1.20 172.16.1.40;
+  option routers 172.16.1.1;
+  option domain-name-servers 172.16.1.20;
 }
 ---------------------------------------------------------
 Restart: sudo systemctl restart isc-dhcp-server
-PROVJERA: systemctl status isc-dhcp-server (Mora biti zeleno "active").
+Status: sudo systemctl status isc-dhcp-server
+
+WIRESHARK ANALIZA (Filter: dhcp ili bootp):
+Profesor traži DORA proces:
+1. Discover (Klijent traži IP - Broadcast)
+2. Offer (Server nudi IP - Unicast/Broadcast)
+3. Request (Klijent prihvaća ponudu)
+4. Ack (Server potvrđuje - Acknowledgment)
 
 
 
 ===============================================================================
 3. DNS (BIND9 - Prebacivanje imena u IP i obrnuto)
 ===============================================================================
-Zadatak traži zonu: test.tsrb.com
-
 KORAK A (Definicija): sudo nano /etc/bind/named.conf.local
-Dodajemo dvije zone (Normalnu i Obrnutu):
 ---------------------------------------------------------
-zone "test.tsrb.com" {
-    type master;
-    file "/etc/bind/db.test.tsrb.com";
-};
-
-zone "1.16.172.in-addr.arpa" {
-    type master;
-    file "/etc/bind/db.rev";
-};
+zone "test.tsrb.com" { type master; file "/etc/bind/db.test.tsrb.com"; };
+zone "1.16.172.in-addr.arpa" { type master; file "/etc/bind/db.rev"; };
 ---------------------------------------------------------
 
 KORAK B (Forward - Ime u IP): sudo cp /etc/bind/db.local /etc/bind/db.test.tsrb.com
 Uredi: sudo nano /etc/bind/db.test.tsrb.com
 ---------------------------------------------------------
-# PAZI: Sve što završava imenom mora imati TOČKU (.) na kraju!
+# PAZI: Svako ime mora završiti točkom (.)
 @ IN SOA ns.test.tsrb.com. root.test.tsrb.com. ( 2024022601 604800 ... )
 @ IN NS ns.test.tsrb.com.
-ns IN A 172.16.1.20      # ns (NameServer) je tvoj IP
-@  IN A 172.16.1.20      # Sama domena je tvoj IP
-www IN A 172.16.1.20     # www poddomena je tvoj IP
+ns IN A 172.16.1.20
+@  IN A 172.16.1.20
+www IN A 172.16.1.20
 ---------------------------------------------------------
 
 KORAK C (Reverse - IP u Ime): sudo cp /etc/bind/db.127 /etc/bind/db.rev
 Uredi: sudo nano /etc/bind/db.rev
 ---------------------------------------------------------
-@ IN SOA ns.test.tsrb.com. root.test.tsrb.com. ( ... )
-@ IN NS ns.test.tsrb.com.
-20 IN PTR test.tsrb.com.  # Broj 20 (zadnji broj tvog IP-a) vodi na ime
+20 IN PTR test.tsrb.com.  # 20 je zadnji broj tvog IP-a
 ---------------------------------------------------------
-TEST: nslookup test.tsrb.com I nslookup 172.16.1.20
+Restart: sudo systemctl restart bind9
+
+WIRESHARK ANALIZA (Filter: dns):
+Vidiš 'Standard query' (klijent šalje ime) i 'Standard query response' 
+(server vraća IP). Provjeri 'A record' u paketu.
 
 ===============================================================================
 4. FTP (VSFTPD - Prijenos datoteka)
 ===============================================================================
-Uredi: sudo nano /etc/vsftpd.conf
-Ključne linije za AUTORIZIRANI PRISTUP (Zadatak 4):
+Putanja: sudo nano /etc/vsftpd.conf
 ---------------------------------------------------------
-anonymous_enable=NO    # ISKLJUČI anonimne (oni ne trebaju lozinku)
-local_enable=YES       # UKLJUČI lokalne korisnike (oni trebaju lozinku)
-write_enable=YES       # Dozvoli im pisanje (upload)
-chroot_local_user=YES  # Sigurnost: Korisnik ne može "šetati" po cijelom serveru
+anonymous_enable=NO    # ISKLJUČI goste (Autorizirani pristup!)
+local_enable=YES       # Dozvoli lokalne Linux korisnike
+write_enable=YES       # Dozvoli upload
+chroot_local_user=YES  # Zaključaj korisnika u Home folder
 ---------------------------------------------------------
-SAVJET: Ako chroot ne radi, dodaj na kraj: allow_writeable_chroot=YES
+Zadnja linija (ako zapne): allow_writeable_chroot=YES
+Restart: sudo systemctl restart vsftpd
+
+WIRESHARK ANALIZA (Filter: ftp):
+Vidiš 'Response 220' (pozdrav), 'USER marin', 'Response 331' (traži pass) 
+i 'PASS lozinka'. 
+BITNO: FTP lozinke su u čistom tekstu (ne-sigurno)!
 
 ===============================================================================
-5. TESTIRANJE (Što profesor gleda?)
+5. SSH (OPENSSH - Sigurni daljinski pristup)
 ===============================================================================
-1. Windows 7 CMD: 'ipconfig /all'
-   -> Gleda se: Je li IP u rangu .20-.40? Je li DNS 172.16.1.20?
-2. Wireshark:
-   -> Filter 'dhcp'. Profesor traži da vidiš 4 paketa (DORA).
-3. Linux Terminal: 'dig test.tsrb.com'
-   -> Gleda se: "ANSWER SECTION" - mora pisati tvoj IP .20.
-4. FTP spajanje:
-   -> Probaj se spojiti kao 'anonymous'. Ako te odbije (Permission denied), 
-      uspješno si riješio Zadatak 4!
+Putanja: sudo nano /etc/ssh/sshd_config
+Zadatak često traži zabranu roota:
+---------------------------------------------------------
+PermitRootLogin no       # Zabranjen ulaz kao root (Sigurnost!)
+PasswordAuthentication yes
+---------------------------------------------------------
+Restart: sudo systemctl restart ssh
+
+WIRESHARK ANALIZA (Filter: ssh):
+Za razliku od FTP-a, ovdje vidiš samo 'Encrypted packet'. 
+Lozinka se NE može vidjeti (Kriptirano).
+
+===============================================================================
+6. FIREWALL (UFW - Sigurnost)
+===============================================================================
+Objašnjenje: Ako je servis aktivan, ali klijent ne može do njega, provjeri firewall.
+Naredbe:
+- sudo ufw allow 22/tcp   # SSH
+- sudo ufw allow 53       # DNS
+- sudo ufw allow 67/udp   # DHCP
+- sudo ufw allow 21/tcp   # FTP
+- sudo ufw enable         # Upali sve
 
 ===============================================================================
 NAJČEŠĆE GREŠKE (Quick Fix):
-- Nisi stavio točku u DNS-u? -> Servis Bind9 se neće pokrenuti.
-- Nisi napravio 'netplan apply'? -> Adresa servera će ostati stara.
-- VMware mrežna kartica nije u istom LAN Segmentu? -> Klijent i Server se ne vide.
-- Zaboravio si 'sudo'? -> Permission denied.
+- DNS Timeout? Ugasi Windows Firewall na klijentu!
+- Servis ne starta? Gledaj logove: 'sudo tail -f /var/log/syslog'.
+- Klijent nema IP? Provjeri VMware: Settings -> Network -> LAN Segment 1.
+- Točka (.) u DNS-u? Ako je nemaš na kraju ns.test.tsrb.com. -> DNS PADA.
 ###############################################################################

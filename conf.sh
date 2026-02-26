@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================================
-# ULTRA SERVICE AUTOMATOR v5.6 - EXAM PATHS & TESTING EDITION
+# ULTRA SERVICE AUTOMATOR v5.8 - FINAL EXAM EDITION (VMware & LAN Segment)
 # ==========================================================================
 
 set -euo pipefail
@@ -33,7 +33,6 @@ log_info() { echo -e "${BLUE}${BOLD}[i]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}${BOLD}[!]${NC} $1"; }
 log_step() { echo -e "${PURPLE}${BOLD}➤ $1${NC}"; }
 
-# NOVA FUNKCIJA ZA ISPIS PUTANJA
 print_config_paths() {
     echo -e "\n${CYAN}${BOLD}────────── KONFIGURACIJSKE DATOTEKE ──────────${NC}"
     echo -e "$1"
@@ -68,7 +67,7 @@ cat << "EOF"
 ██████╔╝   ██║   ██║ ╚████║██║  ██║██║ ╚═╝ ██║██║╚██████╗ 
 ╚═════╝    ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝ ╚═════╝ 
         U L T R A   S E R V I C E   A U T O M A T O R
-                    v5.6 PATHS EDITION
+                    v5.8 FINAL EDITION
 EOF
 echo -e "${NC}"
 }
@@ -77,11 +76,11 @@ echo -e "${NC}"
 setup_static_ip() {
     log_step "KONFIGURACIJA STATIČKE IP ADRESE"
     ip -brief link show
-    while [[ -z "${IFACE:-}" ]]; do read -p "Interface (npr. ens33): " IFACE; done
-    while [[ -z "${IP:-}" ]]; do read -p "IP adresa (npr. 172.16.1.20): " IP; done
+    while [[ -z "${IFACE:-}" ]]; do read -p "Interface (VMware obično ens33): " IFACE; done
+    while [[ -z "${IP:-}" ]]; do read -p "IP adresa (npr. 172.16.1.10): " IP; done
     while [[ -z "${MASK:-}" ]]; do read -p "CIDR (npr. 24): " MASK; done
     while [[ -z "${GW:-}" ]]; do read -p "Gateway (npr. 172.16.1.1): " GW; done
-    while [[ -z "${DNS:-}" ]]; do read -p "DNS (npr. 172.16.1.20): " DNS; done
+    while [[ -z "${DNS:-}" ]]; do read -p "DNS (npr. 172.16.1.10): " DNS; done
 
     NETPLAN="/etc/netplan/01-static.yaml"
     backup_file "$NETPLAN"
@@ -107,7 +106,7 @@ EOF
     log_success "Mreža redefinirana na $IP."
     
     print_config_paths "MREŽA (Netplan): /etc/netplan/01-static.yaml"
-    print_test_guide "PROVJERA: ip a show $IFACE\nPING:    ping -c 3 $GW\nRUTA:    ip route show"
+    print_test_guide "RESTART/APPLY: sudo netplan apply\nPROVJERA IP:   ip a show $IFACE\nPROVJERA RUTE: ip route show"
     pause
 }
 
@@ -119,12 +118,13 @@ setup_dhcp() {
     read -p "Netmask (npr. 255.255.255.0): " NMASK
     read -p "Pool start: " START
     read -p "Pool end: " END
-    read -p "Default lease time (sekunde, npr 360): " D_LEASE
-    read -p "Max lease time (sekunde, npr 300): " M_LEASE
+    read -p "Default lease time (360): " D_LEASE
+    read -p "Max lease time (300): " M_LEASE
 
     apt update && apt install -y isc-dhcp-server
     
-    IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+    IFACE=$(ip -4 route show default | awk '{print $5}' | head -n1)
+    [ -z "$IFACE" ] && IFACE="ens33"
     sed -i "s/INTERFACESv4=\"\"/INTERFACESv4=\"$IFACE\"/" /etc/default/isc-dhcp-server
 
     CONF="/etc/dhcp/dhcpd.conf"
@@ -143,10 +143,10 @@ subnet $NET netmask $NMASK {
 EOF
 
     systemctl restart isc-dhcp-server
-    log_success "DHCP servis aktivan na $IFACE."
+    log_success "DHCP servis konfiguriran i restartan."
 
     print_config_paths "DHCP MAIN: /etc/dhcp/dhcpd.conf\nDHCP DEFAULTS: /etc/default/isc-dhcp-server"
-    print_test_guide "STATUS:   systemctl status isc-dhcp-server\nLOGS:     tail -f /var/log/syslog | grep dhcpd\nZAKUP:    cat /var/lib/dhcp/dhcpd.leases"
+    print_test_guide "RESTART:  sudo systemctl restart isc-dhcp-server\nSTATUS:   sudo systemctl status isc-dhcp-server\nZAKUP:    cat /var/lib/dhcp/dhcpd.leases\nLOGS:     tail -f /var/log/syslog | grep dhcpd"
     pause
 }
 
@@ -184,10 +184,10 @@ $i4 IN PTR $DOMAIN.
 EOF
 
     systemctl restart bind9
-    log_success "DNS zone za $DOMAIN kreirane."
+    log_success "DNS zone kreirane i Bind9 restartan."
 
     print_config_paths "DNS ZONES:    /etc/bind/named.conf.local\nFORWARD ZONE: /etc/bind/db.$DOMAIN\nREVERSE ZONE: /etc/bind/db.rev"
-    print_test_guide "TEST:     nslookup $DOMAIN $SERVER_IP\nDIG:      dig @$SERVER_IP $DOMAIN\nREVERSE:  host $SERVER_IP\nCONF CHK: named-checkconf /etc/bind/named.conf.local"
+    print_test_guide "RESTART:  sudo systemctl restart bind9\nSTATUS:   sudo systemctl status bind9\nTEST:     nslookup $DOMAIN $SERVER_IP\nREVERSE:  nslookup $SERVER_IP $SERVER_IP"
     pause
 }
 
@@ -225,10 +225,10 @@ EOF
     chown "$FTP_USER:$FTP_USER" "/home/$FTP_USER/ftp/upload"
     
     systemctl restart vsftpd
-    log_success "FTP servis spreman."
+    log_success "FTP servis konfiguriran i restartan."
 
     print_config_paths "FTP KONFIG: /etc/vsftpd.conf"
-    print_test_guide "POVEZIVANJE: ftp $SERVER_IP\nISPIT (Konfig): grep 'anonymous_enable' /etc/vsftpd.conf\nLOGS:    tail -f /var/log/vsftpd.log"
+    print_test_guide "RESTART:  sudo systemctl restart vsftpd\nSTATUS:   sudo systemctl status vsftpd\nPROVJERA: ftp localhost"
     pause
 }
 
@@ -251,35 +251,36 @@ setup_ssh() {
     echo "AllowUsers $SSH_USER" >> /etc/ssh/sshd_config
 
     systemctl restart ssh
-    log_success "SSH konfiguriran za korisnika $SSH_USER."
+    log_success "SSH servis konfiguriran i restartan."
 
-    print_config_paths "SSH SERVER KONFIG: /etc/ssh/sshd_config"
-    print_test_guide "STATUS:   systemctl status ssh | grep Active\nTEST:     ssh $SSH_USER@localhost\nISPIT:    Pokazati da je Root login 'no' u /etc/ssh/sshd_config"
+    print_config_paths "SSH KONFIG: /etc/ssh/sshd_config"
+    print_test_guide "RESTART:  sudo systemctl restart ssh\nSTATUS:   sudo systemctl status ssh\nTEST:     ssh $SSH_USER@localhost"
     pause
 }
 
 # ================= FIREWALL =================
 setup_firewall_secure() {
-    log_step "FIREWALL SECURE MODE"
+    log_step "FIREWALL SECURE MODE (UFW)"
     ufw reset
     ufw default deny incoming
     ufw default allow outgoing
+    # Portovi: SSH(22), DNS(53), DHCP(67/udp), FTP(21), FTP-Passive(40000-40100)
     for p in 22 53 67/udp 21 40000:40100/tcp; do ufw allow $p; done
     ufw --force enable
-    log_success "Firewall aktivan."
+    log_success "Firewall aktivan s pravilima za ispit."
 
-    print_config_paths "UFW STATUS: sudo ufw status"
+    print_config_paths "UFW STATUS: sudo ufw status numbered"
     pause
 }
 
 kill_firewall() {
     ufw disable
-    log_warn "Firewall je isključen."
+    log_warn "Firewall je isključen (SVI PORTOVI OTVORENI)."
     pause
 }
 
 view_logs() {
-    log_step "PREGLED LOGOVA"
+    log_step "PREGLED LOGOVA (Service Automator)"
     [ -f "$LOG_FILE" ] && tail -n 40 "$LOG_FILE" || log_error "Log datoteka nije pronađena."
     pause
 }
