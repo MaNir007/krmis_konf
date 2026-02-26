@@ -1,209 +1,136 @@
 ###############################################################################
-#             VODIČ ZA KONFIGURACIJU MREŽNIH SERVISA (DEBIAN/MINT)            #
-#                    TEHNIČKI PODSJETNIK I TIPS & TRICKS                      #
+#           MASTER ISPITNI VODIČ: TSRB - MREŽNI SERVISI (VMware Edition)      #
+#                      DETALJNA ANALIZA I KORACI                              #
 ###############################################################################
 
 ===============================================================================
-1. STATIČKI IP (NETPLAN)
+0. VRHUNSKI TRIK: KAKO INSTALIRATI SVE BEZ INTERNETA?
 ===============================================================================
-Putanja: /etc/netplan/01-static.yaml
+Problem: Kad si u "LAN Segmentu", nemaš interneta za 'apt install'.
+Rješenje:
+1. U VMwareu postavi mrežnu na "NAT".
+2. U terminalu kucaj: sudo dhclient (da dobiješ privremeni internet IP).
+3. Instaliraj sve odjednom:
+   sudo apt update && sudo apt install isc-dhcp-server bind9 vsftpd ufw -y
+4. VRATI mrežnu na "LAN Segment 1".
+5. Sada kreni s konfiguracijom prema dolje.
 
-Naredbe:
-$ sudo ip a                            # Provjera naziva interface-a
-$ sudo nano /etc/netplan/01-static.yaml # Uređivanje
-$ sudo netplan apply                   # Primjena postavki
+===============================================================================
+1. STATIČKI IP (Netplan - Srce sustava)
+===============================================================================
+Putanja: /etc/netplan/01-network-manager-all.yaml (ili slično)
+Naredba: sudo nano /etc/netplan/*.yaml
 
-Konfiguracija:
+DETALJNA KONFIGURACIJA:
+---------------------------------------------------------
 network:
   version: 2
-  renderer: networkd
+  renderer: networkd   # 'networkd' je bolji za servere od NetworkManagera
   ethernets:
-    UPISI_INTERFACE:
-      dhcp4: no
+    ens33:             # Provjeri ime kartice sa 'ip a' (u VMwareu je ens33)
+      dhcp4: no        # ISKLJUČI automatsko traženje adrese
       addresses:
-        - UPISI_IP_SERVERA/UPISI_MASKU
-      routes:
-        - to: default
-          via: UPISI_GATEWAY
-      nameservers:
-        addresses: [UPISI_DNS]
-
-TIPS & TRICKS:
-- PAZI NA INDENTACIJU! YAML datoteke koriste razmake (space), ne tabove.
-- Ako SSH-aš na server, 'netplan apply' može prekinuti vezu ako promijeniš IP.
-- Uvijek provjeri sučelje sa 'ip link show' (npr. ens33, eth0).
+        - 172.16.1.20/24  # Tvoja fiksna adresa i maska (255.255.255.0)
+---------------------------------------------------------
+Primjena: sudo netplan apply
+ISPITNI SAVJET: Ako 'netplan apply' zapne, kucaj 'sudo netplan --debug apply' 
+da vidiš gdje je greška u razmacima (indentaciji).
 
 ===============================================================================
-2. DHCP SERVER (KEA DHCP)
+2. DHCP (ISC-DHCP-SERVER - Automatsko dijeljenje adresa)
 ===============================================================================
-Putanja: /etc/kea/kea-dhcp4.conf
+Datoteka 1: /etc/default/isc-dhcp-server
+-> Ovdje samo kažeš na kojoj kartici server "sluša".
+-> Izmjeni: INTERFACESv4="ens33"
 
-Naredbe:
-$ sudo apt install kea-dhcp4-server
-$ sudo nano /etc/kea/kea-dhcp4.conf
-$ sudo kea-dhcp4 -t /etc/kea/kea-dhcp4.conf # Testiranje sintakse (VAŽNO!)
-$ sudo systemctl restart kea-dhcp4-server
+Datoteka 2: /etc/dhcp/dhcpd.conf
+---------------------------------------------------------
+# Ovi parametri su ključni za Zadatak 1.a (360s/300s)
+default-lease-time 360;   # Vrijeme nakon kojeg klijent mora pitati za produženje
+max-lease-time 300;       # Maksimalno vrijeme zakupa (prema slici)
 
-Konfiguracija:
-{
- "Dhcp4": {
-   "interfaces-config": { "interfaces": ["*"] },
-   "lease-database": { "type": "memfile" },
-   "subnet4": [{
-     "subnet": "UPISI_MREZU/UPISI_MASKU",
-     "pools": [{ "pool": "UPISI_START_IP - UPISI_END_IP" }],
-     "option-data": [
-       { "name": "routers", "data": "UPISI_IP_SERVERA" },
-       { "name": "domain-name-servers", "data": "UPISI_IP_SERVERA" }
-     ]
-   }]
- }
+authoritative;            # Kažeš: "Ja sam jedini i glavni DHCP u ovoj mreži"
+
+subnet 172.16.1.0 netmask 255.255.255.0 {
+  range 172.16.1.20 172.16.1.40;         # Opseg adresa
+  option routers 172.16.1.1;             # Gateway (ulaz u druge mreže)
+  option domain-name-servers 172.16.1.20; # Tvoja IP adresa (jer si ti DNS)
 }
+---------------------------------------------------------
+Restart: sudo systemctl restart isc-dhcp-server
+PROVJERA: systemctl status isc-dhcp-server (Mora biti zeleno "active").
 
-TIPS & TRICKS:
-- Provjera je li port 67 otvoren: 'sudo ss -ulpn | grep 67'.
-- Pregled dodijeljenih adresa: 'cat /var/lib/kea/kea-leases4.csv'.
-- Ako server ne starta, logovi su u 'journalctl -u kea-dhcp4-server'.
+
 
 ===============================================================================
-3. DNS POSLUŽITELJ (BIND9)
+3. DNS (BIND9 - Prebacivanje imena u IP i obrnuto)
 ===============================================================================
-Putanje: /etc/bind/named.conf.local, /etc/bind/db.domena, /etc/bind/db.rev
+Zadatak traži zonu: test.tsrb.com
 
-Naredbe:
-$ sudo apt install bind9 bind9utils dnsutils
-$ sudo named-checkconf                              # Provjera configa
-$ sudo named-checkzone UPISI_DOMENU /etc/bind/db.fajl # Provjera zone
-$ sudo systemctl restart bind9
-
-Konfiguracija (/etc/bind/named.conf.local):
-zone "UPISI_DOMENU" {
- type master;
- file "/etc/bind/db.UPISI_DOMENU";
-};
-zone "UPISI_REVERSE.in-addr.arpa" {
- type master;
- file "/etc/bind/db.rev";
+KORAK A (Definicija): sudo nano /etc/bind/named.conf.local
+Dodajemo dvije zone (Normalnu i Obrnutu):
+---------------------------------------------------------
+zone "test.tsrb.com" {
+    type master;
+    file "/etc/bind/db.test.tsrb.com";
 };
 
-Forward Zona (/etc/bind/db.UPISI_DOMENU):
-$TTL 604800
-@ IN SOA ns.UPISI_DOMENU. root.UPISI_DOMENU. ( UPISI_DATUM_01 604800 86400 2419200 604800 )
-@ IN NS ns.UPISI_DOMENU.
-ns IN A UPISI_IP_SERVERA
-@ IN A UPISI_IP_SERVERA
-www IN CNAME @
+zone "1.16.172.in-addr.arpa" {
+    type master;
+    file "/etc/bind/db.rev";
+};
+---------------------------------------------------------
 
-TIPS & TRICKS:
-- Ne zaboravi TOČKU (.) na kraju FQDN-a (npr. ns.mojadomena.hr.).
-- Serijski broj mora se povećati kod svake promjene (format YYYYMMDDNN).
-- Testiranje: 'dig @localhost UPISI_DOMENU' ili 'nslookup UPISI_DOMENU localhost'.
+KORAK B (Forward - Ime u IP): sudo cp /etc/bind/db.local /etc/bind/db.test.tsrb.com
+Uredi: sudo nano /etc/bind/db.test.tsrb.com
+---------------------------------------------------------
+# PAZI: Sve što završava imenom mora imati TOČKU (.) na kraju!
+@ IN SOA ns.test.tsrb.com. root.test.tsrb.com. ( 2024022601 604800 ... )
+@ IN NS ns.test.tsrb.com.
+ns IN A 172.16.1.20      # ns (NameServer) je tvoj IP
+@  IN A 172.16.1.20      # Sama domena je tvoj IP
+www IN A 172.16.1.20     # www poddomena je tvoj IP
+---------------------------------------------------------
 
-===============================================================================
-4. FTP SERVIS (VSFTPD)
-===============================================================================
-Putanja: /etc/vsftpd.conf, /etc/vsftpd.userlist
-
-Naredbe:
-$ sudo apt install vsftpd net-tools
-$ sudo adduser UPISI_USER
-$ echo "UPISI_USER" | sudo tee -a /etc/vsftpd.userlist
-$ sudo systemctl restart vsftpd
-
-Konfiguracija (/etc/vsftpd.conf):
-listen=YES
-listen_ipv6=NO
-anonymous_enable=NO
-local_enable=YES
-write_enable=YES
-chroot_local_user=YES
-user_sub_token=$USER
-local_root=/home/$USER/ftp
-userlist_enable=YES
-userlist_file=/etc/vsftpd.userlist
-userlist_deny=NO
-allow_writeable_chroot=YES
-
-TIPS & TRICKS:
-- Prava na direktorijima su KRITIČNA. Root (/home/user/ftp) mora biti 755.
-- Koristi 'chmod 755 /home/UPISI_USER/ftp' za ispravan rad chroot-a.
-- Ako se ne možeš spojiti sa Windowsa, provjeri Pasivni mode (Pasv portove).
+KORAK C (Reverse - IP u Ime): sudo cp /etc/bind/db.127 /etc/bind/db.rev
+Uredi: sudo nano /etc/bind/db.rev
+---------------------------------------------------------
+@ IN SOA ns.test.tsrb.com. root.test.tsrb.com. ( ... )
+@ IN NS ns.test.tsrb.com.
+20 IN PTR test.tsrb.com.  # Broj 20 (zadnji broj tvog IP-a) vodi na ime
+---------------------------------------------------------
+TEST: nslookup test.tsrb.com I nslookup 172.16.1.20
 
 ===============================================================================
-5. FIREWALL (UFW)
+4. FTP (VSFTPD - Prijenos datoteka)
 ===============================================================================
-Naredbe:
-$ sudo ufw default deny incoming
-$ sudo ufw default allow outgoing
-$ sudo ufw allow 22                     # SSH
-$ sudo ufw allow 53                     # DNS
-$ sudo ufw allow 67/udp                 # DHCP
-$ sudo ufw allow 21/tcp                 # FTP
-$ sudo ufw allow 40000:40100/tcp        # FTP Pasivni portovi
-$ sudo ufw enable
-$ sudo ufw status verbose
-
-TIPS & TRICKS:
-- Uvijek prvo dozvoli port 22 (SSH) prije nego klikneš 'enable', inače ćeš se izbaciti.
-- 'ufw reset' briše sve i vraća na tvorničke postavke.
-- Ako nešto ne radi, 'sudo ufw disable' je prva dijagnostika da vidiš smeta li vatrozid.
+Uredi: sudo nano /etc/vsftpd.conf
+Ključne linije za AUTORIZIRANI PRISTUP (Zadatak 4):
+---------------------------------------------------------
+anonymous_enable=NO    # ISKLJUČI anonimne (oni ne trebaju lozinku)
+local_enable=YES       # UKLJUČI lokalne korisnike (oni trebaju lozinku)
+write_enable=YES       # Dozvoli im pisanje (upload)
+chroot_local_user=YES  # Sigurnost: Korisnik ne može "šetati" po cijelom serveru
+---------------------------------------------------------
+SAVJET: Ako chroot ne radi, dodaj na kraj: allow_writeable_chroot=YES
 
 ===============================================================================
-6. PROVJERA VEZE (TESTIRANJE S KLIJENTA)
+5. TESTIRANJE (Što profesor gleda?)
 ===============================================================================
-
--------------------------------------------------------------------------------
-A) DHCP TEST (Dobivanje IP adrese)
--------------------------------------------------------------------------------
-LINUX MINT:
-$ sudo dhclient -v -r       # Otpuštanje trenutne adrese
-$ sudo dhclient -v          # Traženje nove adrese
-$ ip a                      # Potvrda dobivene IP adrese
-
-WINDOWS:
-> ipconfig /release         # Otpuštanje adrese
-> ipconfig /renew           # Traženje nove adrese
-> ipconfig /all             # Detaljna provjera IP-a, Gateway-a i DNS-a
-
--------------------------------------------------------------------------------
-B) DNS TEST (Forward & Reverse)
--------------------------------------------------------------------------------
-LINUX MINT (Koristimo 'dig' ili 'nslookup'):
-$ dig @UPISI_IP_SERVERA UPISI_DOMENU            # Forward (A record)
-$ dig @UPISI_IP_SERVERA www.UPISI_DOMENU        # Forward (CNAME)
-$ dig -x UPISI_IP_SERVERA @UPISI_IP_SERVERA     # REVERSE (PTR)
-
-WINDOWS:
-> nslookup UPISI_DOMENU UPISI_IP_SERVERA        # Forward
-> nslookup UPISI_IP_SERVERA UPISI_IP_SERVERA    # REVERSE
-
--------------------------------------------------------------------------------
-C) SSH TEST (Udaljeni pristup)
--------------------------------------------------------------------------------
-LINUX MINT:
-$ ssh UPISI_USER@UPISI_IP_SERVERA
-
-WINDOWS (CMD / PowerShell):
-> ssh UPISI_USER@UPISI_IP_SERVERA
-(Ako traži 'prijavu fingerprinta', upišite 'yes')
-
--------------------------------------------------------------------------------
-D) FTP TEST (Prijenos datoteka)
--------------------------------------------------------------------------------
-LINUX MINT:
-$ ftp UPISI_IP_SERVERA
-(Zatim unijeti korisničko ime i lozinku)
-$ lftp -u UPISI_USER,UPISI_LOZINKA UPISI_IP_SERVERA
-
-WINDOWS:
-> ftp UPISI_IP_SERVERA
-(Interaktivno u CMD-u)
-ILI FileZilla/WinSCP: Host: UPISI_IP_SERVERA, Port: 21
+1. Windows 7 CMD: 'ipconfig /all'
+   -> Gleda se: Je li IP u rangu .20-.40? Je li DNS 172.16.1.20?
+2. Wireshark:
+   -> Filter 'dhcp'. Profesor traži da vidiš 4 paketa (DORA).
+3. Linux Terminal: 'dig test.tsrb.com'
+   -> Gleda se: "ANSWER SECTION" - mora pisati tvoj IP .20.
+4. FTP spajanje:
+   -> Probaj se spojiti kao 'anonymous'. Ako te odbije (Permission denied), 
+      uspješno si riješio Zadatak 4!
 
 ===============================================================================
-7. OPĆI SAVJETI ZA NATJECANJE
-===============================================================================
-1. LOGOVI SU PRIJATELJI: 'tail -f /var/log/syslog' prati sve servise u realnom vremenu.
-2. STATUSI: 'systemctl status servis' ti točno kaže na kojoj liniji configa si napravio tipfeler.
-3. MREŽA: Ako klijent ne dobiva DHCP, provjeri jesu li virtualne kartice u istom LAN segmentu.
-4. PING: Ako ping ne radi, a IP-ovi su OK, ugasi firewall na oba računala ('ufw disable' na Mintu, Control Panel na Win).
+NAJČEŠĆE GREŠKE (Quick Fix):
+- Nisi stavio točku u DNS-u? -> Servis Bind9 se neće pokrenuti.
+- Nisi napravio 'netplan apply'? -> Adresa servera će ostati stara.
+- VMware mrežna kartica nije u istom LAN Segmentu? -> Klijent i Server se ne vide.
+- Zaboravio si 'sudo'? -> Permission denied.
+###############################################################################

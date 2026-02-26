@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================================
-# ULTRA SERVICE AUTOMATOR v5.5 - UNIVERSAL EXAM & TESTING EDITION
+# ULTRA SERVICE AUTOMATOR v5.6 - EXAM PATHS & TESTING EDITION
 # ==========================================================================
 
 set -euo pipefail
@@ -33,6 +33,13 @@ log_info() { echo -e "${BLUE}${BOLD}[i]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}${BOLD}[!]${NC} $1"; }
 log_step() { echo -e "${PURPLE}${BOLD}➤ $1${NC}"; }
 
+# NOVA FUNKCIJA ZA ISPIS PUTANJA
+print_config_paths() {
+    echo -e "\n${CYAN}${BOLD}────────── KONFIGURACIJSKE DATOTEKE ──────────${NC}"
+    echo -e "$1"
+    echo -e "${CYAN}${BOLD}──────────────────────────────────────────────${NC}"
+}
+
 print_test_guide() {
     echo -e "\n${YELLOW}${BOLD}────────── KORISNE NAREDBE I TESTIRANJE ──────────${NC}"
     echo -e "$1"
@@ -61,7 +68,7 @@ cat << "EOF"
 ██████╔╝   ██║   ██║ ╚████║██║  ██║██║ ╚═╝ ██║██║╚██████╗ 
 ╚═════╝    ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝ ╚═════╝ 
         U L T R A   S E R V I C E   A U T O M A T O R
-                    v5.5 ULTIMATE EDITION
+                    v5.6 PATHS EDITION
 EOF
 echo -e "${NC}"
 }
@@ -99,6 +106,7 @@ EOF
     SERVER_IP="$IP"
     log_success "Mreža redefinirana na $IP."
     
+    print_config_paths "MREŽA (Netplan): /etc/netplan/01-static.yaml"
     print_test_guide "PROVJERA: ip a show $IFACE\nPING:    ping -c 3 $GW\nRUTA:    ip route show"
     pause
 }
@@ -116,7 +124,6 @@ setup_dhcp() {
 
     apt update && apt install -y isc-dhcp-server
     
-    # Detekcija interface-a za listening
     IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
     sed -i "s/INTERFACESv4=\"\"/INTERFACESv4=\"$IFACE\"/" /etc/default/isc-dhcp-server
 
@@ -138,7 +145,8 @@ EOF
     systemctl restart isc-dhcp-server
     log_success "DHCP servis aktivan na $IFACE."
 
-    print_test_guide "STATUS:   systemctl status isc-dhcp-server\nLOGS:     tail -f /var/log/syslog | grep dhcpd\nZAKUP:    cat /var/lib/dhcp/dhcpd.leases\nWIRESHARK: filter 'dhcp' (bootp)"
+    print_config_paths "DHCP MAIN: /etc/dhcp/dhcpd.conf\nDHCP DEFAULTS: /etc/default/isc-dhcp-server"
+    print_test_guide "STATUS:   systemctl status isc-dhcp-server\nLOGS:     tail -f /var/log/syslog | grep dhcpd\nZAKUP:    cat /var/lib/dhcp/dhcpd.leases"
     pause
 }
 
@@ -148,7 +156,6 @@ setup_dns() {
     [ -z "$SERVER_IP" ] && read -p "IP servera: " SERVER_IP
     read -p "Domena (npr. test.tsrb.com): " DOMAIN
 
-    # Ekstrakcija okteta za reverse zonu
     IFS='.' read -r i1 i2 i3 i4 <<< "$SERVER_IP"
     REV_ZONE="$i3.$i2.$i1.in-addr.arpa"
 
@@ -160,7 +167,6 @@ zone "$DOMAIN" { type master; file "/etc/bind/db.$DOMAIN"; };
 zone "$REV_ZONE" { type master; file "/etc/bind/db.rev"; };
 EOF
 
-    # Forward zona
     cat <<EOF > "/etc/bind/db.$DOMAIN"
 \$TTL 604800
 @ IN SOA ns.$DOMAIN. root.$DOMAIN. ( $(date +%Y%m%d)01 604800 86400 2419200 604800 )
@@ -170,7 +176,6 @@ ns IN A $SERVER_IP
 www IN A $SERVER_IP
 EOF
 
-    # Reverse zona
     cat <<EOF > /etc/bind/db.rev
 \$TTL 604800
 @ IN SOA ns.$DOMAIN. root.$DOMAIN. ( $(date +%Y%m%d)01 604800 86400 2419200 604800 )
@@ -181,6 +186,7 @@ EOF
     systemctl restart bind9
     log_success "DNS zone za $DOMAIN kreirane."
 
+    print_config_paths "DNS ZONES:    /etc/bind/named.conf.local\nFORWARD ZONE: /etc/bind/db.$DOMAIN\nREVERSE ZONE: /etc/bind/db.rev"
     print_test_guide "TEST:     nslookup $DOMAIN $SERVER_IP\nDIG:      dig @$SERVER_IP $DOMAIN\nREVERSE:  host $SERVER_IP\nCONF CHK: named-checkconf /etc/bind/named.conf.local"
     pause
 }
@@ -208,7 +214,6 @@ pasv_min_port=40000
 pasv_max_port=40100
 EOF
 
-    # Kreiranje korisnika i sigurne strukture
     if ! id "$FTP_USER" &>/dev/null; then
         useradd -m -s /bin/bash "$FTP_USER"
     fi
@@ -220,8 +225,9 @@ EOF
     chown "$FTP_USER:$FTP_USER" "/home/$FTP_USER/ftp/upload"
     
     systemctl restart vsftpd
-    log_success "FTP servis spreman (User: $FTP_USER, Anon: $ANON)."
+    log_success "FTP servis spreman."
 
+    print_config_paths "FTP KONFIG: /etc/vsftpd.conf"
     print_test_guide "POVEZIVANJE: ftp $SERVER_IP\nISPIT (Konfig): grep 'anonymous_enable' /etc/vsftpd.conf\nLOGS:    tail -f /var/log/vsftpd.log"
     pause
 }
@@ -239,7 +245,6 @@ setup_ssh() {
     
     backup_file /etc/ssh/sshd_config
     
-    # Sigurnosno čišćenje i postavljanje
     sed -i '/^PermitRootLogin/d; /^PasswordAuthentication/d; /^AllowUsers/d' /etc/ssh/sshd_config
     echo "PermitRootLogin no" >> /etc/ssh/sshd_config
     echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
@@ -248,6 +253,7 @@ setup_ssh() {
     systemctl restart ssh
     log_success "SSH konfiguriran za korisnika $SSH_USER."
 
+    print_config_paths "SSH SERVER KONFIG: /etc/ssh/sshd_config"
     print_test_guide "STATUS:   systemctl status ssh | grep Active\nTEST:     ssh $SSH_USER@localhost\nISPIT:    Pokazati da je Root login 'no' u /etc/ssh/sshd_config"
     pause
 }
@@ -258,28 +264,23 @@ setup_firewall_secure() {
     ufw reset
     ufw default deny incoming
     ufw default allow outgoing
-    # Portovi: SSH(22), DNS(53), DHCP(67/udp), FTP(21), FTP-Passive(40000-40100)
     for p in 22 53 67/udp 21 40000:40100/tcp; do ufw allow $p; done
     ufw --force enable
-    log_success "Firewall pravila primijenjena."
+    log_success "Firewall aktivan."
 
-    print_test_guide "LISTA:    sudo ufw status numbered\nVERBOSE:  sudo ufw status verbose"
+    print_config_paths "UFW STATUS: sudo ufw status"
     pause
 }
 
 kill_firewall() {
     ufw disable
-    log_warn "Firewall je isključen (SVI PORTOVI OTVORENI)."
+    log_warn "Firewall je isključen."
     pause
 }
 
 view_logs() {
-    log_step "PREGLED LOGOVA (Service Automator)"
-    if [ -f "$LOG_FILE" ]; then
-        tail -n 40 "$LOG_FILE"
-    else
-        log_error "Log datoteka nije pronađena."
-    fi
+    log_step "PREGLED LOGOVA"
+    [ -f "$LOG_FILE" ] && tail -n 40 "$LOG_FILE" || log_error "Log datoteka nije pronađena."
     pause
 }
 
